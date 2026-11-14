@@ -8,9 +8,13 @@ export const HORIZONS_TARGETS = Object.freeze([
   Object.freeze({ id: "699", name: "Saturn" }),
   Object.freeze({ id: "799", name: "Uranus" }),
   Object.freeze({ id: "899", name: "Neptune" }),
+  Object.freeze({ id: "301", name: "Moon" }),
 ]);
 
-export const SOLAR_SYSTEM_BODIES = Object.freeze(HORIZONS_TARGETS.filter(({ id }) => id !== "10"));
+export const MOON_TARGET = HORIZONS_TARGETS.find(({ id }) => id === "301");
+export const SOLAR_SYSTEM_BODIES = Object.freeze(
+  HORIZONS_TARGETS.filter(({ id }) => id !== "10" && id !== "301"),
+);
 
 const MONTHS = new Map([
   ["Jan", 0], ["Feb", 1], ["Mar", 2], ["Apr", 3],

@@ -87,13 +87,16 @@ test("propagates ADS-B quota responses and Retry-After without success-shaped da
   });
 });
 
-test("returns cached, Sun-centered vectors for Earth and the planets", async () => {
+test("returns cached Sun-centered planet vectors and an Earth-centered Moon vector", async () => {
   let upstreamCalls = 0;
   const handler = createSourceApiHandler(async (input) => {
     upstreamCalls += 1;
     const url = new URL(input);
-    assert.equal(url.searchParams.get("CENTER"), "'500@10'");
     const targetId = url.searchParams.get("COMMAND").replaceAll("'", "");
+    assert.equal(
+      url.searchParams.get("CENTER"),
+      targetId === "301" ? "'500@399'" : "'500@10'",
+    );
     const result = `$$SOE
 2461358.569444444 = A.D. 2026-Nov-14 01:40:00.0000 UT
  X = ${targetId}E+08 Y = 2E+07 Z = 1E+06
@@ -114,8 +117,11 @@ $$EOE`;
   assert.equal(payload.bodies.length, 8);
   assert.equal(payload.bodies[2].target.name, "Earth");
   assert.equal(payload.bodies[2].center, "Sun");
+  assert.equal(payload.moon.target.name, "Moon");
+  assert.equal(payload.moon.center, "Earth");
   assert.deepEqual(payload.errors, []);
-  assert.equal(upstreamCalls, 8);
+  assert.equal(upstreamCalls, 9);
   assert.equal(JSON.parse(second.body).bodies.length, 8);
-  assert.equal(upstreamCalls, 8);
+  assert.equal(JSON.parse(second.body).moon.target.name, "Moon");
+  assert.equal(upstreamCalls, 9);
 });

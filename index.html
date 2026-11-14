@@ -17,44 +17,44 @@
         <div class="topbar-note"><span class="live-dot"></span> PUBLIC DATA VIEWER</div>
       </header>
 
-      <section class="workspace" aria-label="Satellite globe">
+      <section class="workspace" aria-label="Interactive Solar System">
         <section class="globe-panel">
           <div class="panel-heading">
             <div>
-              <p class="eyebrow">EARTH / ORBITAL VIEW</p>
-              <h1>Earth, in orbit.</h1>
-              <p class="subheading">Explore published satellite and spacecraft orbits around a rotating globe.</p>
+              <p class="eyebrow">SOLAR SYSTEM / LIVE EPHEMERIS</p>
+              <h1>The Solar System, live.</h1>
+              <p class="subheading">Explore current planetary positions, then zoom from Neptune to the Earth–Moon neighborhood.</p>
             </div>
             <div class="time-chip"><span class="time-dot"></span><span id="clock">--:--:-- UTC</span></div>
           </div>
 
           <div class="globe-stage" id="globeStage">
-            <canvas id="globe" aria-label="Interactive Earth globe showing satellites"></canvas>
-            <div class="view-controls" aria-label="Globe view controls">
+            <canvas id="solarSystemCanvas" aria-label="Interactive, Sun-centered Solar System view with the planets and Moon"></canvas>
+            <div class="view-controls" aria-label="Solar System view controls">
               <button id="zoomOut" type="button" aria-label="Zoom out">−</button>
               <button id="zoomIn" type="button" aria-label="Zoom in">+</button>
-              <button id="frameOrbits" type="button">Frame orbits</button>
-              <button id="frameEnvironment" type="button">Frame space environment</button>
-              <button id="resetZoom" type="button">Reset zoom</button>
-              <button id="fullscreenToggle" type="button" aria-label="Open globe fullscreen">Fullscreen ⛶</button>
+              <button id="frameSolarSystem" type="button">Entire Solar System</button>
+              <button id="frameEarthMoon" type="button">Earth + Moon</button>
+              <button id="resetZoom" type="button">Center Sun</button>
+              <button id="fullscreenToggle" type="button" aria-label="Open Solar System fullscreen">Fullscreen ⛶</button>
             </div>
-            <div class="globe-hint">DRAG TO ROTATE <span aria-hidden="true">·</span> PINCH / SCROLL TO ZOOM <span aria-hidden="true">·</span> SELECT FOR ORBIT TRACE</div>
+            <div class="globe-hint">DRAG TO PAN <span aria-hidden="true">·</span> PINCH / SCROLL TO ZOOM <span aria-hidden="true">·</span> SELECT A PLANET TO FOCUS</div>
             <div class="globe-overlay">
-              <span class="overlay-label">CATALOG OBJECTS</span>
+              <span class="overlay-label">EARTH-ORBIT CATALOG</span>
               <strong id="objectCount">0</strong>
             </div>
           </div>
           <div class="globe-footer">
             <div class="legend">
-              <span class="legend-dot"></span> Orbit-level colors
-              <span class="legend-selected"></span> Selected
-              <span class="legend-aircraft"></span> Aircraft
-              <span class="legend-station"></span> Ground station
+              <span class="legend-sun"></span> Sunlight
+              <span class="legend-planet"></span> Planet
+              <span class="legend-moon"></span> Moon
+              <span class="legend-orbit"></span> Mean orbit guide
             </div>
             <div class="status-stack">
               <p id="sourceStatus" role="status">Loading CelesTrak active catalog…</p>
-              <p id="mapStatus" role="status">Loading land outlines…</p>
-              <p class="coverage-note">Coverage limits: public Earth-orbit GP catalog only; not every spacecraft, deep-space mission, maneuver, or live onboard telemetry. Objects behind Earth are naturally occluded.</p>
+              <p id="mapStatus" role="status">Loading current JPL Horizons ephemerides…</p>
+              <p class="coverage-note">Planet positions use current JPL Horizons vectors; distances are to scale, while body sizes are enlarged for visibility. Moon orbit and planetary paths are visual guides.</p>
             </div>
           </div>
         </section>
@@ -72,7 +72,7 @@
           </section>
 
           <section class="control-section source-controls">
-            <p class="eyebrow">ADDITIONAL GLOBE LAYERS</p>
+            <p class="eyebrow">EARTH NEIGHBORHOOD LAYERS</p>
             <label class="layer-toggle" for="showAircraft">
               <input id="showAircraft" type="checkbox" />
               <span>Regional aircraft</span>
@@ -121,9 +121,9 @@
           </section>
 
           <section class="control-section details-section">
-            <p class="eyebrow">SELECTED OBJECT</p>
+            <p class="eyebrow">SELECTED EARTH-ORBIT OBJECT</p>
             <div id="details" class="details-card">
-              <p class="empty-state">Select a point or list entry to inspect its published orbital elements.</p>
+              <p class="empty-state">Select a catalog entry to focus on Earth and inspect its published orbital elements.</p>
             </div>
           </section>
         </aside>
@@ -134,15 +134,12 @@
           <div>
             <p class="eyebrow">SOLAR SYSTEM / COMPUTED EPHEMERIS</p>
             <h2 id="solarSystemTitle">Current Solar System positions</h2>
-            <p class="subheading">JPL Horizons Sun-centered geometric vectors in the J2000 ecliptic frame; positions and speeds are computed, not telemetry.</p>
+            <p class="subheading">JPL Horizons Sun-centered planet vectors and an Earth-centered Moon vector. Positions advance from published velocities between ephemeris refreshes.</p>
           </div>
           <button id="loadHorizons" class="secondary-button" type="button">Update ephemerides</button>
         </header>
         <p id="horizonsStatus" class="source-status" role="status">Requesting JPL Horizons ephemeris…</p>
         <div class="solar-system-layout">
-          <div id="solarSystemPlot" class="solar-system-plot" role="img" aria-label="Sun-centered Solar System positions">
-            <span class="empty-state">Waiting for computed positions.</span>
-          </div>
           <div id="solarSystemBodies" class="solar-system-bodies" aria-live="polite">
             <span class="empty-state">Waiting for computed positions.</span>
           </div>
@@ -155,18 +152,12 @@
           <div>
             <p class="eyebrow">SPACE ENVIRONMENT / LIVE OBSERVATIONS</p>
             <h2 id="environmentTitle">Measured inputs and telemetry limits</h2>
-            <p class="subheading">Live readings used by the distance-scaled environment effects in the globe viewport.</p>
+            <p class="subheading">Live Earth and solar-environment measurements; these observations are separate from the JPL planetary ephemeris.</p>
           </div>
           <div class="environment-tools">
             <small id="weatherStatus" role="status">Waiting for NOAA / ACE observations…</small>
           </div>
         </header>
-        <div class="environment-legend" aria-label="Space environment effects shown in the globe">
-          <span><i class="legend-solar-wind"></i>Solar-wind flow · measured ACE speed</span>
-          <span><i class="legend-magnetosphere"></i>Magnetopause · pressure-only estimate</span>
-          <span><i class="legend-xray"></i>X-ray · incident flux at sunlit atmosphere</span>
-          <span class="environment-scale-note">Orbit positions and environment radii share one Earth-radius scale.</span>
-        </div>
         <div class="weather-grid" aria-label="Latest space-weather measurements">
           <article class="weather-card">
             <p>Solar X-ray · 0.1–0.8 nm</p>
@@ -202,7 +193,7 @@
         <p class="environment-note">
           ACE density and speed set dynamic pressure; they do not supply the interplanetary magnetic-field direction needed for a full magnetosphere model.
           GOES particle fluxes and Kp are instrument/index measurements, not global particle maps or satellite-specific dose.
-          X-ray flux is shown as incident solar irradiance, not surface heating.
+          X-ray flux measures incident solar irradiance; no surface heating is estimated.
           Spacecraft mass, onboard temperature, attitude, and hardware telemetry are shown only when a source actually publishes them; none are inferred here.
         </p>
       </section>
@@ -238,7 +229,7 @@
           </article>
           <article class="coverage-card">
             <div class="coverage-card-heading"><span class="scope-icon" aria-hidden="true">✧</span><strong>Solar System</strong><span id="coverage-solar-state" class="coverage-state pending">CONNECTING</span></div>
-            <p>JPL Horizons provides computed Sun-centered vectors for the planets and Earth; interplanetary spacecraft telemetry is not connected.</p>
+            <p>JPL Horizons supplies Sun-centered planet vectors and an Earth-centered Moon vector. Displayed body sizes and projected shadow cones are illustrative, not to scale.</p>
             <a href="https://ssd.jpl.nasa.gov/horizons/" target="_blank" rel="noreferrer">JPL Horizons ↗</a>
           </article>
           <article class="coverage-card">
@@ -250,13 +241,11 @@
       </section>
 
       <footer class="page-footer">
-        <span>Positions and speeds are SGP4 estimates using published elements, not satellite telemetry.</span>
-        <a href="https://nasa-gibs.github.io/gibs-api-docs/" target="_blank" rel="noreferrer">NASA GIBS imagery ↗</a>
+        <span>Planet positions are JPL ephemerides; satellite positions are SGP4 estimates, not telemetry.</span>
         <a href="https://services.swpc.noaa.gov/json/" target="_blank" rel="noreferrer">NOAA SWPC / ACE data ↗</a>
         <a href="https://www.adsb.lol/docs/open-data/api" target="_blank" rel="noreferrer">ADSB.lol open data ↗</a>
         <a href="https://network.satnogs.org/api/" target="_blank" rel="noreferrer">SatNOGS API ↗</a>
         <a href="https://ssd.jpl.nasa.gov/horizons/" target="_blank" rel="noreferrer">NASA/JPL Horizons ↗</a>
-        <a href="https://www.naturalearthdata.com/about/terms-of-use/" target="_blank" rel="noreferrer">Land outlines: Natural Earth ↗</a>
         <a href="https://celestrak.org/NORAD/documentation/gp-data-formats.php" target="_blank" rel="noreferrer">Satellite elements: CelesTrak ↗</a>
       </footer>
     </main>

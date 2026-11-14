@@ -12,19 +12,24 @@ import {
   solarWindEarthRadiiPerSecond,
 } from "./environment.mjs";
 import { subsolarPoint } from "./solar.mjs";
-import LAND_URL from "./data/ne_50m_land.geojson?url";
 import { parseSpaceWeatherSeries, SPACE_WEATHER_FEEDS } from "./space-weather.mjs";
 import {
   parseAircraftPayload,
   SOLAR_SYSTEM_BODIES,
 } from "./data-sources.mjs";
+import {
+  ASTRONOMICAL_UNIT_KM,
+  EARTH_OBLIQUITY_DEGREES,
+  SOLAR_VIEW_BODIES,
+  SUN_RADIUS_KM,
+  solarSystemPositions,
+} from "./solar-view.mjs";
 
 const CATALOG_URL = "https://celestrak.org/NORAD/elements/gp.php";
 const GIBS_WMS_URL = "https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi";
 const GIBS_TRUE_COLOR_LAYER = "MODIS_Terra_CorrectedReflectance_TrueColor";
 const REFRESH_INTERVAL_MS = 2 * 60 * 60 * 1000;
 const SPACE_WEATHER_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
-const EARTH_IMAGERY_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const AIRCRAFT_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 const STATIONS_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const HORIZONS_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
@@ -38,7 +43,7 @@ const MIN_ZOOM = 0.01;
 const VIEW_ROTATION_EPOCH = Date.now();
 const VIEW_ROTATION_EPOCH_ANGLE = earthRotationAngleAt(VIEW_ROTATION_EPOCH);
 
-const canvas = document.querySelector("#globe");
+const canvas = document.querySelector("#solarSystemCanvas");
 const context = canvas.getContext("2d");
 const stage = document.querySelector("#globeStage");
 const catalogSelect = document.querySelector("#catalog");
@@ -52,7 +57,8 @@ const visibleCountElement = document.querySelector("#visibleCount");
 const clockElement = document.querySelector("#clock");
 const mapStatusElement = document.querySelector("#mapStatus");
 const fullscreenButton = document.querySelector("#fullscreenToggle");
-const frameOrbitsButton = document.querySelector("#frameOrbits");
+const frameSolarSystemButton = document.querySelector("#frameSolarSystem");
+const frameEarthMoonButton = document.querySelector("#frameEarthMoon");
 const zoomInButton = document.querySelector("#zoomIn");
 const zoomOutButton = document.querySelector("#zoomOut");
 const resetZoomButton = document.querySelector("#resetZoom");
@@ -65,7 +71,6 @@ const weatherCards = new Map(SPACE_WEATHER_FEEDS.map((feed) => [feed.id, {
   unit: document.querySelector(`#weather-${feed.id}-unit`),
   time: document.querySelector(`#weather-${feed.id}-time`),
 }]));
-const frameEnvironmentButton = document.querySelector("#frameEnvironment");
 const aircraftToggle = document.querySelector("#showAircraft");
 const stationsToggle = document.querySelector("#showStations");
 const aircraftLatitudeInput = document.querySelector("#aircraftLatitude");
@@ -76,7 +81,6 @@ const aircraftStatusElement = document.querySelector("#aircraftStatus");
 const stationsStatusElement = document.querySelector("#stationsStatus");
 const loadHorizonsButton = document.querySelector("#loadHorizons");
 const horizonsStatusElement = document.querySelector("#horizonsStatus");
-const solarSystemPlotElement = document.querySelector("#solarSystemPlot");
 const solarSystemBodiesElement = document.querySelector("#solarSystemBodies");
 const coverageStates = new Map([
   ["orbit", document.querySelector("#coverage-orbit-state")],
@@ -126,6 +130,9 @@ let weatherSeriesById = new Map();
 let aircraftPositions = [];
 let groundStations = [];
 let lastSolarSystemEpoch = null;
+let solarSystemPayload = null;
+let solarCamera = { x: 0, y: 0 };
+let solarZoom = 1;
 let activePointers = new Map();
 let pinchStart = null;
 
@@ -286,56 +293,35 @@ async function loadGroundStations() {
 }
 
 function renderSolarSystem(payload) {
-  const bodies = payload.bodies;
-  const maxDistanceKm = Math.max(...bodies.map((body) => body.distanceKm));
-  const centerX = 360;
-  const centerY = 160;
-  const plotRadius = 132;
-  const scale = plotRadius / maxDistanceKm;
-  const colors = new Map([
-    ["199", "#a9a9b5"],
-    ["299", "#e7bc82"],
-    ["399", "#60b8ef"],
-    ["499", "#e97968"],
-    ["599", "#d5b27a"],
-    ["699", "#d9c68a"],
-    ["799", "#7ed1d1"],
-    ["899", "#8298ed"],
-  ]);
-  const markers = bodies.map((body) => {
-    const x = centerX + body.positionKm.x * scale;
-    const y = centerY - body.positionKm.y * scale;
-    const color = colors.get(body.target.id) ?? "#d6e1e4";
-    return `<g>
-      <circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="${body.target.id === "399" ? 4 : 3}" fill="${color}">
-        <title>${escapeHtml(body.target.name)} · ${new Intl.NumberFormat(undefined, { maximumSignificantDigits: 5 }).format(body.distanceKm)} km from Sun</title>
-      </circle>
-      <text x="${(x + 6).toFixed(2)}" y="${(y - 5).toFixed(2)}" fill="${color}" font-size="9">${escapeHtml(body.target.name)}</text>
-    </g>`;
-  }).join("");
-  solarSystemPlotElement.innerHTML = `
-    <svg viewBox="0 0 720 320" role="img" aria-label="Sun-centered ecliptic positions at ${escapeHtml(sourceTimestamp(bodies[0].timestamp))}">
-      <line x1="${centerX - plotRadius}" y1="${centerY}" x2="${centerX + plotRadius}" y2="${centerY}" stroke="#27404c" />
-      <line x1="${centerX}" y1="${centerY - plotRadius}" x2="${centerX}" y2="${centerY + plotRadius}" stroke="#27404c" />
-      <circle cx="${centerX}" cy="${centerY}" r="5" fill="#ffd47a"><title>Sun</title></circle>
-      <text x="${centerX + 8}" y="${centerY - 8}" fill="#ffd47a" font-size="9">Sun</text>
-      ${markers}
-      <text x="12" y="304" fill="#8295a0" font-size="9">Top-down ecliptic projection · true distance scale · body sizes not to scale</text>
-    </svg>
-  `;
-  solarSystemBodiesElement.innerHTML = bodies.map((body) => {
+  solarSystemPayload = payload;
+  const cards = payload.bodies.map((body) => {
     const speed = Math.hypot(
       body.velocityKmPerSecond.x,
       body.velocityKmPerSecond.y,
       body.velocityKmPerSecond.z,
     );
-    const distanceAu = body.distanceKm / 149597870.7;
     return `<article class="solar-body-card">
       <strong>${escapeHtml(body.target.name)}</strong>
-      <span>${distanceAu.toFixed(3)} AU from Sun</span>
+      <span>${(body.distanceKm / ASTRONOMICAL_UNIT_KM).toFixed(3)} AU from Sun</span>
       <span>${speed.toFixed(2)} km/s heliocentric speed</span>
     </article>`;
-  }).join("");
+  });
+  if (payload.moon) {
+    const moonSpeed = Math.hypot(
+      payload.moon.velocityKmPerSecond.x,
+      payload.moon.velocityKmPerSecond.y,
+      payload.moon.velocityKmPerSecond.z,
+    );
+    cards.splice(3, 0, `<article class="solar-body-card">
+      <strong>Moon</strong>
+      <span>${(payload.moon.distanceKm / 1000).toFixed(1)} thousand km from Earth</span>
+      <span>${moonSpeed.toFixed(2)} km/s geocentric speed</span>
+    </article>`);
+  }
+  solarSystemBodiesElement.innerHTML = cards.join("");
+  mapStatusElement.textContent = payload.moon
+    ? "Earth–Moon vector included · positions advance from Horizons velocities between refreshes."
+    : "Planet positions advance from Horizons velocities · lunar ephemeris is currently unavailable.";
 }
 
 async function loadHorizons() {
@@ -357,6 +343,16 @@ async function loadHorizons() {
         && Object.values(body.velocityKmPerSecond ?? {}).length === 3
         && Object.values(body.velocityKmPerSecond).every(Number.isFinite)
       ))
+      || (payload.moon !== null && payload.moon !== undefined && !(
+        payload.moon.target?.id === "301"
+        && payload.moon.center === "Earth"
+        && Number.isFinite(payload.moon.timestamp)
+        && Number.isFinite(payload.moon.distanceKm)
+        && Object.values(payload.moon.positionKm ?? {}).length === 3
+        && Object.values(payload.moon.positionKm).every(Number.isFinite)
+        && Object.values(payload.moon.velocityKmPerSecond ?? {}).length === 3
+        && Object.values(payload.moon.velocityKmPerSecond).every(Number.isFinite)
+      ))
     ) {
       throw new TypeError("The data service returned invalid Solar System vectors.");
     }
@@ -364,12 +360,14 @@ async function loadHorizons() {
       throw new TypeError("The data service returned invalid Solar System source status.");
     }
     renderSolarSystem(payload);
-    const complete = payload.bodies.length === SOLAR_SYSTEM_BODIES.length && payload.errors.length === 0;
+    const complete = payload.bodies.length === SOLAR_SYSTEM_BODIES.length
+      && payload.moon
+      && payload.errors.length === 0;
     const sourceTime = sourceTimestamp(payload.bodies[0].timestamp);
     lastSolarSystemEpoch = payload.bodies[0].timestamp;
     setSourceStatus(
       horizonsStatusElement,
-      `JPL Horizons · ${payload.bodies.length}/${SOLAR_SYSTEM_BODIES.length} bodies · ${complete ? "complete" : `partial · ${payload.errors.join(" · ")}`} · computed epoch ${sourceTime}.`,
+      `JPL Horizons · ${payload.bodies.length}/${SOLAR_SYSTEM_BODIES.length} planets${payload.moon ? " + Moon" : ""} · ${complete ? "complete" : `partial · ${payload.errors.join(" · ")}`} · computed epoch ${sourceTime}.`,
     );
     setCoverageState("solar", complete ? "COMPUTED EPHEMERIS" : "PARTIAL EPHEMERIS", "limited");
   } catch (error) {
@@ -446,7 +444,6 @@ function installCatalog(records, fetchedAt, catalog, fromCache) {
   renderRegimeLegend();
   renderDetails();
   objectCountElement.textContent = objects.length.toLocaleString();
-  frameOrbits();
   const source = catalog === "active"
     ? "CelesTrak active Earth-orbit catalog"
     : "CelesTrak space stations";
@@ -577,41 +574,75 @@ function renderDetails() {
 
 function selectObject(object) {
   selectedId = object.id;
-  const position = cachedPositions.get(object.id) ?? positionAt(object, Date.now());
-  if (position) centerViewOnLongitude(position.longitude);
+  frameOrbits();
   renderList();
   renderDetails();
 }
 
 function changeZoom(factor) {
-  zoom = Math.max(MIN_ZOOM, Math.min(1.8, zoom * factor));
+  zoomSolarAt(factor);
+}
+
+function solarBaseScale() {
+  return Math.max(1, Math.min(width, height) * 0.44 / 30.5);
+}
+
+function solarPixelsPerAu() {
+  return solarBaseScale() * solarZoom;
+}
+
+function solarPositionsAt(timeMs = Date.now()) {
+  return solarSystemPayload ? solarSystemPositions(solarSystemPayload, timeMs) : new Map();
+}
+
+function frameSolarSystem() {
+  solarCamera = { x: 0, y: 0 };
+  solarZoom = 1;
+}
+
+function frameEarthMoon() {
+  const earth = solarPositionsAt().get("399");
+  if (!earth || !width || !height) return;
+  solarCamera = { x: earth.x, y: earth.y };
+  const extentAu = 0.0035;
+  solarZoom = Math.min(
+    1000000,
+    Math.max(0.15, Math.min(width, height) * 0.38 / (solarBaseScale() * extentAu)),
+  );
 }
 
 function frameOrbits() {
   const regimeId = regimeSelect.value;
   if (objects.length === 0 || !width || !height) return;
-  let maximumRadiusRatio = 1;
+  const earth = solarPositionsAt().get("399");
+  if (!earth) return;
+  let maximumRadiusKm = EARTH_RADIUS_KM_VALUE;
   let matchingObjects = 0;
   for (const object of objects) {
     if (regimeId !== "all" && object.regimeId !== regimeId) continue;
     matchingObjects += 1;
-    maximumRadiusRatio = Math.max(
-      maximumRadiusRatio,
-      (object.apogeeKm + EARTH_RADIUS_KM_VALUE) / EARTH_RADIUS_KM_VALUE,
-    );
+    maximumRadiusKm = Math.max(maximumRadiusKm, object.apogeeKm + EARTH_RADIUS_KM_VALUE);
   }
   if (matchingObjects === 0) return;
-
-  const baseRadius = Math.min(width * 0.37, height * 0.43);
-  const availableRadius = Math.max(12, Math.min(width, height) / 2 - 42);
-  zoom = Math.max(MIN_ZOOM, Math.min(1.8, availableRadius / (baseRadius * maximumRadiusRatio)));
+  solarCamera = { x: earth.x, y: earth.y };
+  const extentAu = maximumRadiusKm / ASTRONOMICAL_UNIT_KM * 1.25;
+  solarZoom = Math.min(
+    1000000,
+    Math.max(0.15, Math.min(width, height) * 0.38 / (solarBaseScale() * extentAu)),
+  );
 }
 
-function frameEnvironment() {
+function zoomSolarAt(factor, anchorX = width / 2, anchorY = height / 2) {
   if (!width || !height) return;
-  const baseRadius = Math.min(width * 0.37, height * 0.43);
-  const availableRadius = Math.max(2, Math.min(width, height) / 2 - 36);
-  zoom = Math.max(MIN_ZOOM, Math.min(1.8, availableRadius / (baseRadius * 62)));
+  const previousScale = solarPixelsPerAu();
+  const worldX = solarCamera.x + (anchorX - width / 2) / previousScale;
+  const worldY = solarCamera.y - (anchorY - height / 2) / previousScale;
+  solarZoom = Math.max(0.15, Math.min(1000000, solarZoom * factor));
+  const nextScale = solarPixelsPerAu();
+  solarCamera = {
+    x: worldX - (anchorX - width / 2) / nextScale,
+    y: worldY + (anchorY - height / 2) / nextScale,
+  };
 }
 
 function escapeHtml(value) {
@@ -693,16 +724,6 @@ function createLandTexture(geojson) {
   fillCloudTextureGaps();
   if (cloudTexture) renderedTextureLongitude = Number.NaN;
   if (!cloudTexture) mapStatusElement.textContent = "Land outlines: Natural Earth 1:50m (satellite imagery unavailable).";
-}
-
-async function loadLandTexture() {
-  try {
-    const response = await fetch(LAND_URL);
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    createLandTexture(await response.json());
-  } catch (error) {
-    mapStatusElement.textContent = `Land outlines unavailable: ${error.message}`;
-  }
 }
 
 function imageryDate(daysAgo) {
@@ -1021,6 +1042,396 @@ function drawPublicDataLayers(centerX, centerY, radius, now) {
   context.globalAlpha = 1;
 }
 
+function solarScreenPoint(position, pixelsPerAu) {
+  return {
+    x: width / 2 + (position.x - solarCamera.x) * pixelsPerAu,
+    y: height / 2 - (position.y - solarCamera.y) * pixelsPerAu,
+  };
+}
+
+function drawOrbitGuide(radiusAu, pixelsPerAu, label, color = "#48606d") {
+  const radius = radiusAu * pixelsPerAu;
+  if (radius < 8 || radius > Math.max(width, height) * 6) return;
+  context.beginPath();
+  context.arc(width / 2 - solarCamera.x * pixelsPerAu, height / 2 + solarCamera.y * pixelsPerAu, radius, 0, Math.PI * 2);
+  context.strokeStyle = "rgba(91, 124, 139, 0.2)";
+  context.lineWidth = 1;
+  context.setLineDash([3, 7]);
+  context.stroke();
+  context.setLineDash([]);
+  if (radius > 35 && solarZoom < 100) {
+    context.fillStyle = color;
+    context.font = "8px monospace";
+    context.fillText(label, width / 2 - solarCamera.x * pixelsPerAu + radius + 4, height / 2 + solarCamera.y * pixelsPerAu);
+  }
+}
+
+function illuminationFraction(position, observer) {
+  if (!observer) return 1;
+  const sunVector = { x: -position.x, y: -position.y, z: -position.z };
+  const observerVector = {
+    x: observer.x - position.x,
+    y: observer.y - position.y,
+    z: observer.z - position.z,
+  };
+  const sunDistance = Math.hypot(sunVector.x, sunVector.y, sunVector.z);
+  const observerDistance = Math.hypot(observerVector.x, observerVector.y, observerVector.z);
+  if (sunDistance === 0 || observerDistance === 0) return 1;
+  const cosine = (
+    sunVector.x * observerVector.x
+    + sunVector.y * observerVector.y
+    + sunVector.z * observerVector.z
+  ) / (sunDistance * observerDistance);
+  return Math.max(0, Math.min(1, (1 + cosine) / 2));
+}
+
+function drawShadowCone(position, body, pixelsPerAu) {
+  const distanceAu = Math.hypot(position.x, position.y, position.z);
+  if (!distanceAu || body.radiusKm >= SUN_RADIUS_KM) return;
+  const bodyPoint = solarScreenPoint(position, pixelsPerAu);
+  if (
+    bodyPoint.x < -200 || bodyPoint.x > width + 200
+    || bodyPoint.y < -200 || bodyPoint.y > height + 200
+  ) return;
+  const shadowLengthAu = body.radiusKm / (SUN_RADIUS_KM - body.radiusKm) * distanceAu;
+  const radiusAu = body.radiusKm / ASTRONOMICAL_UNIT_KM;
+  const directionX = position.x / distanceAu;
+  const directionY = position.y / distanceAu;
+  const start = {
+    x: position.x + directionX * radiusAu,
+    y: position.y + directionY * radiusAu,
+  };
+  const tip = {
+    x: position.x + directionX * (radiusAu + shadowLengthAu),
+    y: position.y + directionY * (radiusAu + shadowLengthAu),
+  };
+  const sideX = -directionY * radiusAu;
+  const sideY = directionX * radiusAu;
+  const first = solarScreenPoint({ x: start.x + sideX, y: start.y + sideY }, pixelsPerAu);
+  const second = solarScreenPoint({ x: start.x - sideX, y: start.y - sideY }, pixelsPerAu);
+  const end = solarScreenPoint(tip, pixelsPerAu);
+  if (Math.hypot(end.x - first.x, end.y - first.y) < 3) return;
+  context.beginPath();
+  context.moveTo(first.x, first.y);
+  context.lineTo(end.x, end.y);
+  context.lineTo(second.x, second.y);
+  context.closePath();
+  context.fillStyle = "rgba(2, 6, 12, 0.2)";
+  context.fill();
+  context.strokeStyle = "rgba(115, 145, 159, 0.2)";
+  context.lineWidth = 0.7;
+  context.stroke();
+}
+
+function drawSolarBody(body, position, earth, pixelsPerAu, now) {
+  const point = solarScreenPoint(position, pixelsPerAu);
+  if (point.x < -60 || point.x > width + 60 || point.y < -60 || point.y > height + 60) return;
+
+  const actualRadius = body.radiusKm / ASTRONOMICAL_UNIT_KM * pixelsPerAu;
+  const minRadius = body.id === "301" ? 3 : body.id === "399" ? 5 : 3.5;
+  const radius = Math.max(minRadius, Math.min(45, actualRadius));
+  const sunAngle = Math.atan2(position.y, -position.x);
+  const observer = body.id === "399" ? null : earth;
+  const illumination = body.id === "399" ? 0.5 : illuminationFraction(position, observer);
+
+  if (body.id === "699") {
+    context.save();
+    context.translate(point.x, point.y);
+    context.rotate(-0.2);
+    context.beginPath();
+    context.ellipse(0, 0, radius * 2.1, radius * 0.72, 0, 0, Math.PI * 2);
+    context.strokeStyle = "rgba(225, 203, 151, 0.68)";
+    context.lineWidth = Math.max(1.5, radius * 0.18);
+    context.stroke();
+    context.restore();
+  }
+
+  const color = body.color;
+  const dark = context.createRadialGradient(
+    point.x - radius * 0.35, point.y - radius * 0.38, radius * 0.05,
+    point.x, point.y, radius * 1.2,
+  );
+  dark.addColorStop(0, "#18232e");
+  dark.addColorStop(1, "#050a11");
+  context.beginPath();
+  context.arc(point.x, point.y, radius, 0, Math.PI * 2);
+  context.fillStyle = dark;
+  context.fill();
+
+  if (illumination > 0) {
+    context.save();
+    context.beginPath();
+    context.arc(point.x, point.y, radius, 0, Math.PI * 2);
+    context.clip();
+    context.translate(
+      point.x + Math.cos(sunAngle) * radius * (1 - illumination),
+      point.y + Math.sin(sunAngle) * radius * (1 - illumination),
+    );
+    context.rotate(sunAngle);
+    context.scale(Math.max(0.015, illumination), 1);
+    const lit = context.createRadialGradient(-radius * 0.28, -radius * 0.32, 0, 0, 0, radius * 1.3);
+    lit.addColorStop(0, "#ffffff");
+    lit.addColorStop(0.22, color);
+    lit.addColorStop(1, color);
+    context.beginPath();
+    context.arc(0, 0, radius, 0, Math.PI * 2);
+    context.fillStyle = lit;
+    context.fill();
+    context.restore();
+  }
+
+  context.beginPath();
+  context.arc(point.x, point.y, radius, 0, Math.PI * 2);
+  context.strokeStyle = body.id === "399" ? "rgba(116, 211, 255, 0.9)" : "rgba(210, 227, 233, 0.38)";
+  context.lineWidth = body.id === "399" ? 1.2 : 0.7;
+  context.stroke();
+
+  if (body.id === "399") {
+    context.beginPath();
+    context.arc(point.x, point.y, radius + 3, 0, Math.PI * 2);
+    context.strokeStyle = "rgba(89, 190, 239, 0.22)";
+    context.lineWidth = 2;
+    context.stroke();
+  }
+
+  context.fillStyle = "#d9e5e9";
+  context.font = `${body.id === "399" ? 10 : 9}px monospace`;
+  context.textAlign = "left";
+  context.fillText(body.name, point.x + radius + 5, point.y - radius - 3);
+  if (body.id === "301" && earth) {
+    context.fillStyle = "#91a4ac";
+    context.font = "8px monospace";
+    context.fillText(`${Math.round(illumination * 100)}% lit`, point.x + radius + 5, point.y + 7);
+  }
+  if (body.id === "599" || body.id === "699") {
+    context.fillStyle = "#8295a0";
+    context.font = "8px monospace";
+    context.fillText(`${(Math.hypot(position.x, position.y, position.z)).toFixed(2)} AU`, point.x + radius + 5, point.y + 8);
+  }
+}
+
+function earthCenteredEclipticPosition(position, timeMs, earth) {
+  const latitude = position.latitude * Math.PI / 180;
+  const longitude = position.longitude * Math.PI / 180 + earthRotationAngleAt(timeMs);
+  const equatorialX = position.radiusKm * Math.cos(latitude) * Math.cos(longitude);
+  const equatorialY = position.radiusKm * Math.cos(latitude) * Math.sin(longitude);
+  const equatorialZ = position.radiusKm * Math.sin(latitude);
+  const obliquity = EARTH_OBLIQUITY_DEGREES * Math.PI / 180;
+  return {
+    x: earth.x + equatorialX / ASTRONOMICAL_UNIT_KM,
+    y: earth.y + (equatorialY * Math.cos(obliquity) + equatorialZ * Math.sin(obliquity)) / ASTRONOMICAL_UNIT_KM,
+    z: earth.z + (equatorialZ * Math.cos(obliquity) - equatorialY * Math.sin(obliquity)) / ASTRONOMICAL_UNIT_KM,
+  };
+}
+
+function drawEarthNeighborhood(earth, pixelsPerAu, now) {
+  if (solarZoom < 1500) return;
+  const regimeId = regimeSelect.value;
+  const selected = objects.find((object) => object.id === selectedId);
+  if (selected && (regimeId === "all" || selected.regimeId === regimeId)) {
+    context.beginPath();
+    let drawing = false;
+    const period = orbitPeriodSeconds(selected);
+    for (let index = 0; index <= 100; index += 1) {
+      const sampleTime = now + period * 1000 * index / 100;
+      const position = positionAt(selected, sampleTime);
+      if (!position) {
+        drawing = false;
+        continue;
+      }
+      const point = solarScreenPoint(earthCenteredEclipticPosition(position, sampleTime, earth), pixelsPerAu);
+      if (!drawing) context.moveTo(point.x, point.y);
+      else context.lineTo(point.x, point.y);
+      drawing = true;
+    }
+    context.strokeStyle = regimesById.get(selected.regimeId).color;
+    context.globalAlpha = 0.48;
+    context.lineWidth = 1;
+    context.stroke();
+    context.globalAlpha = 1;
+  }
+
+  for (const object of objects) {
+    if (regimeId !== "all" && object.regimeId !== regimeId) continue;
+    const position = cachedPositions.get(object.id);
+    if (!position) continue;
+    const point = solarScreenPoint(earthCenteredEclipticPosition(position, now, earth), pixelsPerAu);
+    if (
+      point.x < -5 || point.x > width + 5
+      || point.y < -5 || point.y > height + 5
+    ) continue;
+    const isSelected = object.id === selectedId;
+    context.beginPath();
+    context.arc(point.x, point.y, isSelected ? 3.5 : 1.8, 0, Math.PI * 2);
+    context.fillStyle = isSelected ? "#67f4dc" : regimesById.get(object.regimeId).color;
+    context.fill();
+  }
+
+  const drawGroundPoint = (latitude, longitude, radiusKm, color, size) => {
+    const point = solarScreenPoint(earthCenteredEclipticPosition({
+      latitude,
+      longitude,
+      radiusKm,
+    }, now, earth), pixelsPerAu);
+    if (
+      point.x < -5 || point.x > width + 5
+      || point.y < -5 || point.y > height + 5
+    ) return;
+    context.beginPath();
+    context.arc(point.x, point.y, size, 0, Math.PI * 2);
+    context.fillStyle = color;
+    context.fill();
+  };
+  if (stationsToggle.checked) {
+    for (const station of groundStations) {
+      drawGroundPoint(
+        station.latitude,
+        station.longitude,
+        EARTH_RADIUS_KM_VALUE + station.altitudeKm,
+        station.connected ? "#75e0bd" : "#b8a6e8",
+        1.8,
+      );
+    }
+  }
+  if (aircraftToggle.checked) {
+    for (const aircraft of aircraftPositions) {
+      if (now - aircraft.positionTimestamp > 120000) continue;
+      drawGroundPoint(
+        aircraft.latitude,
+        aircraft.longitude,
+        EARTH_RADIUS_KM_VALUE + aircraft.altitudeKm,
+        "#ffae6b",
+        2.1,
+      );
+    }
+  }
+}
+
+function drawSolarSystemView(now) {
+  context.fillStyle = "#050b12";
+  context.fillRect(0, 0, width, height);
+  for (let index = 0; index < 130; index += 1) {
+    const x = (Math.sin(index * 127.1 + 8) * 0.5 + 0.5) * width;
+    const y = (Math.sin(index * 311.7 + 4) * 0.5 + 0.5) * height;
+    context.fillStyle = `rgba(169, 208, 215, ${0.1 + (index % 5) * 0.025})`;
+    context.fillRect(x, y, index % 11 === 0 ? 1.5 : 1, index % 11 === 0 ? 1.5 : 1);
+  }
+  if (!solarSystemPayload) {
+    context.fillStyle = "#91a4ac";
+    context.font = "12px monospace";
+    context.textAlign = "center";
+    context.fillText("Waiting for JPL Horizons planetary vectors…", width / 2, height / 2);
+    return;
+  }
+
+  const renderTime = Date.now();
+  const positions = solarPositionsAt(renderTime);
+  const pixelsPerAu = solarPixelsPerAu();
+  const sunPosition = { x: 0, y: 0, z: 0 };
+  const earth = positions.get("399");
+
+  for (const body of SOLAR_VIEW_BODIES) {
+    if (body.orbitAu) drawOrbitGuide(body.orbitAu, pixelsPerAu, body.name, body.color);
+  }
+  if (earth && positions.has("301")) {
+    const moon = positions.get("301");
+    const moonRadius = Math.hypot(moon.x - earth.x, moon.y - earth.y, moon.z - earth.z) * pixelsPerAu;
+    if (moonRadius > 8 && moonRadius < Math.max(width, height) * 3) {
+      const earthPoint = solarScreenPoint(earth, pixelsPerAu);
+      context.beginPath();
+      context.arc(earthPoint.x, earthPoint.y, moonRadius, 0, Math.PI * 2);
+      context.strokeStyle = "rgba(180, 191, 196, 0.27)";
+      context.setLineDash([2, 5]);
+      context.lineWidth = 1;
+      context.stroke();
+      context.setLineDash([]);
+    }
+  }
+
+  if (solarZoom > 500) {
+    for (const body of SOLAR_VIEW_BODIES) {
+      if (body.id === "301") continue;
+      const position = positions.get(body.id);
+      if (position) drawShadowCone(position, body, pixelsPerAu);
+    }
+    const moonPosition = positions.get("301");
+    const moon = SOLAR_VIEW_BODIES.find((body) => body.id === "301");
+    if (moonPosition && moon) drawShadowCone(moonPosition, moon, pixelsPerAu);
+  }
+
+  const sunPoint = solarScreenPoint(sunPosition, pixelsPerAu);
+  const sunRadius = Math.max(9, Math.min(30, SUN_RADIUS_KM / ASTRONOMICAL_UNIT_KM * pixelsPerAu));
+  const corona = context.createRadialGradient(sunPoint.x, sunPoint.y, sunRadius * 0.2, sunPoint.x, sunPoint.y, sunRadius * 3.5);
+  corona.addColorStop(0, "rgba(255, 197, 90, 0.32)");
+  corona.addColorStop(1, "rgba(255, 160, 59, 0)");
+  context.beginPath();
+  context.arc(sunPoint.x, sunPoint.y, sunRadius * 3.5, 0, Math.PI * 2);
+  context.fillStyle = corona;
+  context.fill();
+  const sunGradient = context.createRadialGradient(
+    sunPoint.x - sunRadius * 0.32, sunPoint.y - sunRadius * 0.38, sunRadius * 0.04,
+    sunPoint.x, sunPoint.y, sunRadius,
+  );
+  sunGradient.addColorStop(0, "#fff6c9");
+  sunGradient.addColorStop(0.52, "#ffd47a");
+  sunGradient.addColorStop(1, "#e88435");
+  context.beginPath();
+  context.arc(sunPoint.x, sunPoint.y, sunRadius, 0, Math.PI * 2);
+  context.fillStyle = sunGradient;
+  context.fill();
+  context.fillStyle = "#ffe4a1";
+  context.font = "10px monospace";
+  context.fillText("Sun", sunPoint.x + sunRadius + 6, sunPoint.y - sunRadius - 4);
+
+  for (const body of SOLAR_VIEW_BODIES) {
+    const position = positions.get(body.id);
+    if (position) drawSolarBody(body, position, earth, pixelsPerAu, renderTime);
+  }
+
+  if (earth) {
+    const earthPoint = solarScreenPoint(earth, pixelsPerAu);
+    const earthRadiusPx = Math.max(5, Math.min(45, EARTH_RADIUS_KM / ASTRONOMICAL_UNIT_KM * pixelsPerAu));
+    if (selectedId) {
+      const selectedObject = objects.find((object) => object.id === selectedId);
+      const selectedPosition = selectedObject ? cachedPositions.get(selectedObject.id) : null;
+      if (selectedPosition) {
+        const selectedPoint = solarScreenPoint(
+          earthCenteredEclipticPosition(selectedPosition, renderTime, earth),
+          pixelsPerAu,
+        );
+        context.beginPath();
+        context.arc(selectedPoint.x, selectedPoint.y, 7, 0, Math.PI * 2);
+        context.strokeStyle = "rgba(103, 244, 220, 0.8)";
+        context.lineWidth = 1;
+        context.stroke();
+      }
+    }
+    drawEarthNeighborhood(earth, pixelsPerAu, renderTime);
+
+    if (earthPoint.x > -earthRadiusPx && earthPoint.x < width + earthRadiusPx
+      && earthPoint.y > -earthRadiusPx && earthPoint.y < height + earthRadiusPx) {
+      context.fillStyle = "#94a9b2";
+      context.font = "8px monospace";
+      context.fillText(
+        `1 AU = ${Math.round(pixelsPerAu).toLocaleString()} px · body sizes enlarged`,
+        16,
+        height - 34,
+      );
+    }
+  }
+
+  const epoch = solarSystemPayload.bodies[0]?.timestamp;
+  context.fillStyle = "#748893";
+  context.font = "8px monospace";
+  context.textAlign = "right";
+  context.fillText(
+    `J2000 ecliptic · Horizons epoch ${epoch ? sourceTimestamp(epoch) : "unavailable"} · positions velocity-propagated to now`,
+    width - 14,
+    height - 16,
+  );
+  context.textAlign = "left";
+}
+
 function draw(now) {
   if (now - lastDrawAt < 33) {
     requestAnimationFrame(draw);
@@ -1029,46 +1440,9 @@ function draw(now) {
   lastDrawAt = now;
   if (!width || !height) resizeCanvas();
   context.clearRect(0, 0, width, height);
-
-  const centerX = width / 2;
-  const centerY = height / 2;
-  const radius = Math.max(1, Math.min(width * 0.37, height * 0.43) * zoom);
   const renderTime = Date.now();
-  const stars = 75;
-  for (let index = 0; index < stars; index += 1) {
-    const x = (Math.sin(index * 127.1 + 8) * 0.5 + 0.5) * width;
-    const y = (Math.sin(index * 311.7 + 4) * 0.5 + 0.5) * height;
-    context.fillStyle = `rgba(169, 208, 215, ${0.12 + (index % 5) * 0.035})`;
-    context.fillRect(x, y, index % 9 === 0 ? 1.5 : 1, index % 9 === 0 ? 1.5 : 1);
-  }
-
-  drawSpaceEnvironmentFx(centerX, centerY, radius, now);
-  drawGrid(centerX, centerY, radius);
-  drawEarthAxis(centerX, centerY, radius);
-  drawAtmosphericXrayFx(centerX, centerY, radius, now);
-  drawPublicDataLayers(centerX, centerY, radius, renderTime);
   refreshPositions(renderTime);
-  const selected = objects.find((object) => object.id === selectedId);
-  if (selected && (regimeSelect.value === "all" || selected.regimeId === regimeSelect.value)) {
-    drawOrbit(selected, centerX, centerY, radius, renderTime);
-  }
-
-  for (const object of objects) {
-    if (regimeSelect.value !== "all" && object.regimeId !== regimeSelect.value) continue;
-    const position = cachedPositions.get(object.id);
-    if (!position) continue;
-    const point = pointOnGlobe(position, centerX, centerY, radius, renderTime);
-    if (!point) continue;
-    const isSelected = object.id === selectedId;
-    const pulse = isSelected ? 0.6 + 0.7 * (0.5 + 0.5 * Math.sin(now / 260)) : 0;
-    context.beginPath();
-    context.fillStyle = isSelected ? "#67f4dc" : regimesById.get(object.regimeId).color;
-    context.shadowColor = isSelected ? "#58e5ce" : "transparent";
-    context.shadowBlur = isSelected ? 12 : 0;
-    context.arc(point.x, point.y, isSelected ? 3.8 + pulse : 1.5, 0, Math.PI * 2);
-    context.fill();
-  }
-  context.shadowBlur = 0;
+  drawSolarSystemView(renderTime);
   requestAnimationFrame(draw);
 }
 
@@ -1310,7 +1684,6 @@ regimeSelect.addEventListener("change", () => {
     renderDetails();
   }
   renderList();
-  frameOrbits();
 });
 listElement.addEventListener("click", (event) => {
   const button = event.target.closest("button[data-id]");
@@ -1322,12 +1695,19 @@ canvas.addEventListener("pointerdown", (event) => {
   activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
   canvas.setPointerCapture(event.pointerId);
   if (activePointers.size === 1) {
-    dragStart = { x: event.clientX, y: event.clientY, longitude: viewLongitude, moved: false };
+    dragStart = {
+      x: event.clientX,
+      y: event.clientY,
+      cameraX: solarCamera.x,
+      cameraY: solarCamera.y,
+      scale: solarPixelsPerAu(),
+      moved: false,
+    };
   } else if (activePointers.size === 2) {
     const [first, second] = [...activePointers.values()];
     pinchStart = {
       distance: Math.max(1, Math.hypot(first.x - second.x, first.y - second.y)),
-      zoom,
+      zoom: solarZoom,
     };
     dragStart = null;
   }
@@ -1339,12 +1719,15 @@ canvas.addEventListener("pointermove", (event) => {
   if (activePointers.size >= 2 && pinchStart) {
     const [first, second] = [...activePointers.values()];
     const distance = Math.hypot(first.x - second.x, first.y - second.y);
-    zoom = Math.max(MIN_ZOOM, Math.min(1.8, pinchStart.zoom * distance / pinchStart.distance));
+    solarZoom = Math.max(0.15, Math.min(1000000, pinchStart.zoom * distance / pinchStart.distance));
     return;
   }
   if (!dragStart) return;
   if (Math.hypot(event.clientX - dragStart.x, event.clientY - dragStart.y) > 3) dragStart.moved = true;
-  viewLongitude = dragStart.longitude - (event.clientX - dragStart.x) * 0.45;
+  solarCamera = {
+    x: dragStart.cameraX - (event.clientX - dragStart.x) / dragStart.scale,
+    y: dragStart.cameraY + (event.clientY - dragStart.y) / dragStart.scale,
+  };
 });
 canvas.addEventListener("pointerup", (event) => {
   const wasPinching = pinchStart !== null;
@@ -1354,7 +1737,13 @@ canvas.addEventListener("pointerup", (event) => {
     dragStart = null;
     if (activePointers.size === 1) {
       const [remaining] = activePointers.values();
-      dragStart = { ...remaining, longitude: viewLongitude, moved: true };
+      dragStart = {
+        ...remaining,
+        cameraX: solarCamera.x,
+        cameraY: solarCamera.y,
+        scale: solarPixelsPerAu(),
+        moved: true,
+      };
     }
     return;
   }
@@ -1362,25 +1751,55 @@ canvas.addEventListener("pointerup", (event) => {
     const bounds = canvas.getBoundingClientRect();
     const clickX = event.clientX - bounds.left;
     const clickY = event.clientY - bounds.top;
-    const centerX = width / 2;
-    const centerY = height / 2;
-    const radius = Math.max(1, Math.min(width * 0.37, height * 0.43) * zoom);
     const renderTime = Date.now();
-    let nearest = null;
-    let nearestDistance = 9;
-    for (const object of objects) {
-      const position = cachedPositions.get(object.id);
-      if (!position) continue;
-      const point = pointOnGlobe(position, centerX, centerY, radius, renderTime);
-      if (!point) continue;
-      const distance = Math.hypot(point.x - clickX, point.y - clickY);
-      if (distance < nearestDistance) {
-        nearest = object;
-        nearestDistance = distance;
+    const positions = solarPositionsAt(renderTime);
+    const earth = positions.get("399");
+    let nearestObject = null;
+    let nearestObjectDistance = 9;
+    if (earth && solarZoom >= 1500) {
+      for (const object of objects) {
+        if (regimeSelect.value !== "all" && object.regimeId !== regimeSelect.value) continue;
+        const position = cachedPositions.get(object.id);
+        if (!position) continue;
+        const point = solarScreenPoint(
+          earthCenteredEclipticPosition(position, renderTime, earth),
+          solarPixelsPerAu(),
+        );
+        const distance = Math.hypot(point.x - clickX, point.y - clickY);
+        if (distance < nearestObjectDistance) {
+          nearestObject = object;
+          nearestObjectDistance = distance;
+        }
       }
     }
-    if (nearest) {
-      selectObject(nearest);
+    if (nearestObject) {
+      selectObject(nearestObject);
+    } else {
+      let nearestBody = null;
+      let nearestBodyDistance = 13;
+      for (const body of SOLAR_VIEW_BODIES) {
+        const position = positions.get(body.id);
+        if (!position) continue;
+        const point = solarScreenPoint(position, solarPixelsPerAu());
+        const distance = Math.hypot(point.x - clickX, point.y - clickY);
+        if (distance < nearestBodyDistance) {
+          nearestBody = body;
+          nearestBodyDistance = distance;
+        }
+      }
+      if (nearestBody?.id === "399" || nearestBody?.id === "301") {
+        frameEarthMoon();
+      } else if (nearestBody) {
+        const position = positions.get(nearestBody.id);
+        solarCamera = { x: position.x, y: position.y };
+        solarZoom = Math.max(solarZoom, 100);
+      } else {
+        const sunPoint = solarScreenPoint({ x: 0, y: 0 }, solarPixelsPerAu());
+        if (Math.hypot(sunPoint.x - clickX, sunPoint.y - clickY) < 14) {
+          solarCamera = { x: 0, y: 0 };
+          solarZoom = Math.max(solarZoom, 100);
+        }
+      }
     }
   }
   dragStart = null;
@@ -1392,7 +1811,12 @@ canvas.addEventListener("pointercancel", (event) => {
 });
 canvas.addEventListener("wheel", (event) => {
   event.preventDefault();
-  changeZoom(Math.exp(-event.deltaY / 1000));
+  const bounds = canvas.getBoundingClientRect();
+  zoomSolarAt(
+    Math.exp(-event.deltaY / 1000),
+    event.clientX - bounds.left,
+    event.clientY - bounds.top,
+  );
 }, { passive: false });
 window.addEventListener("resize", () => {
   resizeCanvas();
@@ -1400,9 +1824,9 @@ window.addEventListener("resize", () => {
 new ResizeObserver(resizeCanvas).observe(stage);
 zoomInButton.addEventListener("click", () => changeZoom(1.25));
 zoomOutButton.addEventListener("click", () => changeZoom(1 / 1.25));
-frameOrbitsButton.addEventListener("click", frameOrbits);
-frameEnvironmentButton.addEventListener("click", frameEnvironment);
-resetZoomButton.addEventListener("click", () => { zoom = 1; });
+frameSolarSystemButton.addEventListener("click", frameSolarSystem);
+frameEarthMoonButton.addEventListener("click", frameEarthMoon);
+resetZoomButton.addEventListener("click", frameSolarSystem);
 fullscreenButton.addEventListener("click", async () => {
   try {
     if (document.fullscreenElement === stage) await document.exitFullscreen();
@@ -1414,7 +1838,7 @@ fullscreenButton.addEventListener("click", async () => {
 document.addEventListener("fullscreenchange", () => {
   const isFullscreen = document.fullscreenElement === stage;
   fullscreenButton.textContent = isFullscreen ? "Exit fullscreen" : "Fullscreen ⛶";
-  fullscreenButton.setAttribute("aria-label", isFullscreen ? "Exit globe fullscreen" : "Open globe fullscreen");
+  fullscreenButton.setAttribute("aria-label", isFullscreen ? "Exit Solar System fullscreen" : "Open Solar System fullscreen");
 });
 
 resizeCanvas();
@@ -1427,10 +1851,7 @@ window.setInterval(() => {
 }, AIRCRAFT_REFRESH_INTERVAL_MS);
 window.setInterval(loadGroundStations, STATIONS_REFRESH_INTERVAL_MS);
 window.setInterval(loadHorizons, HORIZONS_REFRESH_INTERVAL_MS);
-window.setInterval(loadEarthImagery, EARTH_IMAGERY_REFRESH_INTERVAL_MS);
 requestAnimationFrame(draw);
-loadLandTexture();
-loadEarthImagery();
 refreshSpaceWeather();
 loadGroundStations();
 loadHorizons();

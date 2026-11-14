@@ -1,9 +1,10 @@
 # Orbital Atlas
 
-A public-data globe for exploring published satellite orbital elements,
-regional aircraft positions, and ground-receiver locations. A small same-origin
-Node/Vite API adapter handles sources that are not suitable for direct browser
-requests. The project is a data viewer, not a fully accurate digital twin.
+A public-data atlas for exploring current Solar System ephemerides, published
+Earth-orbit satellite elements, regional aircraft positions, and ground
+receiver locations. A small same-origin Node/Vite API adapter handles sources
+that are not suitable for direct browser requests. The project is a data
+viewer, not a fully accurate digital twin.
 
 ## Run locally
 
@@ -55,49 +56,45 @@ deployment; do not put credentials in frontend code.
   catalog. It is not a complete list of all spacecraft or deep-space missions.
   Objects without public GP elements, maneuvering vehicles, and classified or
   otherwise unavailable objects cannot be plotted from this source.
-- Land outlines: Natural Earth's 1:50m public-domain land dataset, bundled at
-  `data/ne_50m_land.geojson` and rendered locally.
 - Orbits are propagated with the SGP4/SDP4 implementation in `satellite.js`
   using CelesTrak OMM records. Accuracy is still limited by the published
   elements, their epoch, and the model; this is not a guarantee of exact
   real-time satellite position.
 - Current orbital speed is computed from SGP4's propagated velocity vector.
   It is an estimate based on the published element set, not onboard telemetry.
-- Earth-surface orientation advances using Greenwich Mean Sidereal Time at the
-  sidereal rotation rate. The solar declination/day-night calculation uses the
-  low-order solar ephemeris in `solar.mjs`; the globe displays the north axis
-  and uses a fixed J2000 obliquity of about 23.44°. Precession and nutation are
-  not modeled.
-- The globe surface uses NASA GIBS MODIS Terra corrected true-color imagery,
-  which includes observed cloud cover, using the most recent available UTC-day
-  composite. Its observation date is shown on the globe; this is a daily
-  composite, not a simultaneous real-time global weather map. Images refresh
-  periodically, with Natural Earth outlines retained as a fallback.
-- Day/night shading follows the low-order solar ephemeris and updates with UTC.
+- The main view is a navigable, top-down J2000 ecliptic projection of the Sun,
+  eight planets, and Moon. Planet positions come from JPL Horizons and are
+  advanced continuously from the returned velocity vectors between
+  thirty-minute ephemeris refreshes. The Moon uses an Earth-centered Horizons
+  vector. Use “Entire Solar System” for the overview, “Earth + Moon” to zoom to
+  the lunar neighborhood, or select an Earth-orbit catalog object to frame its
+  orbit. Drag to pan and pinch or scroll to zoom.
+- Orbital distances use a common AU scale. Planet and Moon graphics are
+  enlarged for visibility; the mean planet-orbit circles are guides rather
+  than Horizons osculating paths. The view shades bodies by their computed
+  Sun/Earth geometry and shows the Moon's illuminated fraction. Shadow cones
+  are physically based in length but are only a 2D projection; eclipse depth
+  and atmospheric scattering are not modeled.
 - [NOAA SWPC GOES feeds](https://services.swpc.noaa.gov/json/goes/primary/)
   provide X-ray and energetic proton/electron flux; [ACE solar-wind data](https://services.swpc.noaa.gov/json/ace/swepam/ace_swepam_1h.json)
   provide upstream speed, density, and plasma temperature; the
   [one-minute Kp feed](https://services.swpc.noaa.gov/json/planetary_k_index_1m.json)
   provides estimated geomagnetic activity. These public feeds refresh every
-  five minutes in a separate measurement strip, without covering the globe.
+  five minutes in a separate measurement strip.
   Each reading retains its source timestamp; ACE observations are hourly.
-  Solar-wind flow and an estimated magnetopause are drawn in the same viewport
-  and at the same Earth-radius scale as the orbital markers. Use “Frame space
-  environment” to fit the 60-Rₑ tail; pinch or scroll to zoom and drag to rotate.
-  The tail shape is schematic, not a live magnetic-field solution.
+  These measurements are shown separately from the planetary ephemeris and do
+  not define a live magnetic-field solution.
   ACE SWEpam does not provide the interplanetary magnetic-field direction needed
-  for a full magnetosphere model. GOES particle flux and Kp remain instrument
-  and index measurements; they are not rendered as global particle paths or
-  aurora because those feeds do not locate those effects.
+  for a full magnetosphere model.   GOES particle flux and Kp remain instrument and index measurements; they do
+  not locate global particle paths or aurora.
 - Public orbital catalogs and these NOAA feeds do not provide per-satellite
   temperatures, heat-shield readings, or nuclear-system telemetry. Those values
   are not fabricated or inferred from the environmental feeds.
 - All loaded object markers are continuously propagated from the published
-  elements. Selecting a marker or list entry draws its SGP4/SDP4 orbit trace;
-  the trace is a model based on that element set, not a measured future path.
-  Positions use the computed orbital radius relative to Earth's radius.
-  Objects on the far side of Earth are naturally hidden by the globe; scroll
-  or use “Frame orbits” to fit higher orbits.
+  elements. Selecting an Earth-orbit catalog entry focuses the main view on
+  Earth and draws its SGP4/SDP4 orbit trace; the trace is a model based on that
+  element set, not a measured future path. Orbit and planet distances share
+  physical units, while planetary body sizes are enlarged for visibility.
 - Catalog entries are grouped and color-coded as VLEO, LEO, MEO, GEO,
   highly-elliptical, or high/transfer orbits. The level filter frames the
   selected regime, and the details panel shows current altitude plus mean-element
@@ -107,8 +104,6 @@ deployment; do not put credentials in frontend code.
   atmospheric drag can be significant. SGP4 propagates the published drag term;
   this viewer does not model changing atmospheric density, couple space weather
   into orbit decay, or predict maneuvering, and cannot guarantee full accuracy.
-- The globe uses 1:50m land outlines. Its texture render target scales with
-  zoom and display pixel density; use the fullscreen control for a larger view.
 - [ADSB.lol](https://www.adsb.lol/docs/open-data/api) is connected through the
   same-origin server adapter. The user selects a center and radius (1–250
   nautical miles); recent reported positions are plotted at reported altitude,
@@ -125,11 +120,10 @@ deployment; do not put credentials in frontend code.
   counts are not pass schedules or proof of a successful link.
 - [NASA/JPL Horizons](https://ssd.jpl.nasa.gov/horizons/) is connected for
   the Sun-centered geometric vectors of Mercury, Venus, Earth, and Mars through
-  Neptune. Their current positions and heliocentric speeds are plotted at a
-  common epoch in the J2000 ecliptic frame and refreshed every 30 minutes.
-  The diagram preserves relative distance (planet sizes are not to scale) and
-  is separate from the Earth-orbit globe. These are computed ephemerides, not
-  spacecraft telemetry.
+  Neptune, plus the Moon relative to Earth. Planet positions and heliocentric
+  speeds are refreshed every 30 minutes and advanced from the published
+  velocities between refreshes. These are computed ephemerides, not spacecraft
+  telemetry.
 - The app has no configured mission-specific source for onboard temperature
   or mass. Those values remain unavailable; neither is inferred from orbit or
   space-weather measurements.
@@ -141,9 +135,9 @@ deployment; do not put credentials in frontend code.
 Other domains need their own authoritative data sources and must show
 provenance, coverage, and time of observation.
 
-We acknowledge the use of imagery provided by NASA's Global Imagery Browse
-Services (GIBS), part of NASA's Earth Science Data and Information System
-(ESDIS).
+JPL Horizons ephemerides are computations, not spacecraft telemetry. The
+display is not a full n-body simulation; planetary perturbations and detailed
+surface appearance are not synthesized locally.
 
 ## Test
 

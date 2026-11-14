@@ -2,6 +2,7 @@ import {
   parseAircraftPayload,
   parseHorizonsVector,
   parseSatnogsStations,
+  MOON_TARGET,
   SOLAR_SYSTEM_BODIES,
 } from "./data-sources.mjs";
 
@@ -171,7 +172,7 @@ async function getStations(fetchImpl, cache) {
   });
 }
 
-async function fetchHorizonsBody(fetchImpl, target, requestedAt) {
+async function fetchHorizonsBody(fetchImpl, target, requestedAt, centerId = "10", centerName = "Sun") {
   const time = requestedAt.toISOString().slice(0, 16).replace("T", " ");
   const params = new URLSearchParams({
     format: "json",
@@ -179,7 +180,7 @@ async function fetchHorizonsBody(fetchImpl, target, requestedAt) {
     OBJ_DATA: "NO",
     MAKE_EPHEM: "YES",
     EPHEM_TYPE: "VECTORS",
-    CENTER: "'500@10'",
+    CENTER: `'500@${centerId}'`,
     TLIST: `'${time}'`,
     TLIST_TYPE: "CAL",
     TIME_TYPE: "UT",
@@ -190,7 +191,7 @@ async function fetchHorizonsBody(fetchImpl, target, requestedAt) {
     throw new UpstreamError(payload.error ?? "JPL Horizons returned no result.");
   }
   try {
-    return parseHorizonsVector(payload.result, target.id, "Sun");
+    return parseHorizonsVector(payload.result, target.id, centerName);
   } catch (error) {
     throw new UpstreamError(`JPL Horizons response for ${target.name} was invalid: ${error.message}`);
   }
@@ -212,8 +213,16 @@ async function getSolarSystem(fetchImpl, cache) {
         await new Promise((resolve) => setTimeout(resolve, 300));
       }
     }
-    const bodies = [];
+    let moon = null;
     const errors = [];
+    try {
+      moon = await fetchHorizonsBody(fetchImpl, MOON_TARGET, requestedAt, "399", "Earth");
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      errors.push(`Moon: ${reason}`);
+    }
+
+    const bodies = [];
     for (let index = 0; index < results.length; index += 1) {
       const result = results[index];
       if (result.status === "fulfilled") {
@@ -230,6 +239,7 @@ async function getSolarSystem(fetchImpl, cache) {
     return {
       fetchedAt: Date.now(),
       bodies,
+      moon,
       errors,
     };
   });

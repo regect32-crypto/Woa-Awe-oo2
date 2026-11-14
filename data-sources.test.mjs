@@ -66,3 +66,16 @@ $$EOE`, "499");
   assert.ok(vector.longitudeDegrees > 0 && vector.longitudeDegrees < 360);
   assert.throws(() => parseHorizonsVector("No ephemeris", "499"), /no vector ephemeris/);
 });
+
+test("parses a JPL Moon vector relative to Earth", () => {
+  const vector = parseHorizonsVector(`$$SOE
+2461358.569444444 = A.D. 2026-Nov-14 01:40:00.0000 UT
+ X = 3.84E+05 Y = 1.0E+03 Z = 2.0E+02
+ VX=-1.0E-01 VY= 1.0E+00 VZ= 2.0E-02
+ LT= 1.2E+00 RG= 3.84E+05 RR= 1.0E+00
+$$EOE`, "301", "Earth");
+
+  assert.equal(vector.target.name, "Moon");
+  assert.equal(vector.center, "Earth");
+  assert.equal(vector.distanceKm, 384000);
+});
