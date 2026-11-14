@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#07111b" />
+    <title>Orbital Atlas</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="./" aria-label="Orbital Atlas home">
+          <span class="brand-mark" aria-hidden="true">O</span>
+          <span>ORBITAL <strong>ATLAS</strong></span>
+        </a>
+        <div class="topbar-note"><span class="live-dot"></span> PUBLIC DATA VIEWER</div>
+      </header>
+
+      <section class="workspace" aria-label="Satellite globe">
+        <section class="globe-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">EARTH / ORBITAL VIEW</p>
+              <h1>Earth, in orbit.</h1>
+              <p class="subheading">Explore public satellite orbital elements around a rotating globe.</p>
+            </div>
+            <div class="time-chip"><span class="time-dot"></span><span id="clock">--:--:-- UTC</span></div>
+          </div>
+
+          <div class="globe-stage" id="globeStage">
+            <canvas id="globe" aria-label="Interactive Earth globe showing satellites"></canvas>
+            <div class="view-controls" aria-label="Globe view controls">
+              <button id="zoomOut" type="button" aria-label="Zoom out">−</button>
+              <button id="zoomIn" type="button" aria-label="Zoom in">+</button>
+              <button id="frameOrbits" type="button">Frame orbits</button>
+              <button id="resetZoom" type="button">Reset zoom</button>
+              <button id="fullscreenToggle" type="button" aria-label="Open globe fullscreen">Fullscreen ⛶</button>
+            </div>
+            <div class="globe-hint">DRAG TO ROTATE <span aria-hidden="true">·</span> SCROLL TO ZOOM / FRAME HIGHER ORBITS</div>
+            <div class="globe-overlay">
+              <span class="overlay-label">CATALOG OBJECTS</span>
+              <strong id="objectCount">0</strong>
+            </div>
+          </div>
+          <div class="globe-footer">
+          <div class="legend"><span class="legend-dot"></span> Orbit-level colors <span class="legend-selected"></span> Selected</div>
+            <div class="status-stack">
+              <p id="sourceStatus" role="status">No catalog loaded. Choose a set to begin.</p>
+              <p id="mapStatus" role="status">Loading land outlines…</p>
+            </div>
+          </div>
+        </section>
+
+        <aside class="control-panel">
+          <section class="control-section">
+            <p class="eyebrow">DATA SOURCE</p>
+            <label class="field-label" for="catalog">Orbital element set</label>
+            <select id="catalog">
+              <option value="stations">Space stations (small set)</option>
+              <option value="active">Active catalog (large set)</option>
+            </select>
+            <button id="loadCatalog" class="primary-button">Load public catalog <span aria-hidden="true">↗</span></button>
+            <p class="micro-copy">Public CelesTrak OMM data. Refresh is limited to once every 2 hours per browser, per set.</p>
+          </section>
+
+          <section class="control-section object-section">
+            <div class="section-title-row">
+              <div>
+                <p class="eyebrow">TRACKING</p>
+                <h2>Objects</h2>
+              </div>
+              <span id="visibleCount" class="count-pill">0</span>
+            </div>
+            <label class="sr-only" for="search">Search satellites</label>
+            <input id="search" type="search" placeholder="Search name or catalog ID" autocomplete="off" />
+            <label class="field-label regime-label" for="regimeFilter">Show orbital level</label>
+            <select id="regimeFilter">
+              <option value="all">All orbital levels</option>
+              <option value="vleo">Very Low Earth Orbit (VLEO)</option>
+              <option value="leo">Low Earth Orbit (LEO)</option>
+              <option value="meo">Medium Earth Orbit (MEO)</option>
+              <option value="geo">Geosynchronous Orbit (GEO)</option>
+              <option value="heo">Highly Elliptical Orbit (HEO)</option>
+              <option value="high">High Earth / Transfer Orbit</option>
+            </select>
+            <div id="regimeLegend" class="regime-legend" aria-label="Orbital level counts"></div>
+            <div id="objectList" class="object-list" aria-live="polite">
+              <p class="empty-state">Load a public catalog to see tracked objects.</p>
+            </div>
+          </section>
+
+          <section class="control-section details-section">
+            <p class="eyebrow">SELECTED OBJECT</p>
+            <div id="details" class="details-card">
+              <p class="empty-state">Select a point or list entry to inspect its published orbital elements.</p>
+            </div>
+          </section>
+        </aside>
+      </section>
+
+      <section class="scope-strip" aria-label="Data coverage">
+        <div><span class="scope-icon">◌</span><strong>Orbit data</strong><span>Public OMM catalog · SGP4 / SDP4</span></div>
+        <div><span class="scope-icon">⌁</span><strong>Weather</strong><span>Not connected</span></div>
+        <div><span class="scope-icon">▤</span><strong>Economy &amp; logistics</strong><span>Not simulated</span></div>
+        <div><span class="scope-icon">⊙</span><strong>Signals &amp; gateways</strong><span>Not mapped</span></div>
+      </section>
+
+      <footer class="page-footer">
+        <span>Orbital radius is to scale; position accuracy depends on the published element set and epoch.</span>
+        <a href="https://www.naturalearthdata.com/about/terms-of-use/" target="_blank" rel="noreferrer">Land outlines: Natural Earth ↗</a>
+        <a href="https://celestrak.org/NORAD/documentation/gp-data-formats.php" target="_blank" rel="noreferrer">Satellite elements: CelesTrak ↗</a>
+      </footer>
+    </main>
+    <script type="module" src="./app.mjs"></script>
+  </body>
+</html>
