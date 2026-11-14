@@ -1,6 +1,7 @@
 import {
   EARTH_RADIUS_KM_VALUE,
   ORBIT_REGIMES,
+  earthRotationAngleAt,
   orbitPeriodSeconds,
   parseCatalog,
   positionAt,
@@ -13,6 +14,10 @@ import {
 import { subsolarPoint } from "./solar.mjs";
 import LAND_URL from "./data/ne_50m_land.geojson?url";
 import { parseSpaceWeatherSeries, SPACE_WEATHER_FEEDS } from "./space-weather.mjs";
+import {
+  parseAircraftPayload,
+  SOLAR_SYSTEM_BODIES,
+} from "./data-sources.mjs";
 
 const CATALOG_URL = "https://celestrak.org/NORAD/elements/gp.php";
 const GIBS_WMS_URL = "https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi";
@@ -20,6 +25,9 @@ const GIBS_TRUE_COLOR_LAYER = "MODIS_Terra_CorrectedReflectance_TrueColor";
 const REFRESH_INTERVAL_MS = 2 * 60 * 60 * 1000;
 const SPACE_WEATHER_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 const EARTH_IMAGERY_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
+const AIRCRAFT_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+const STATIONS_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
+const HORIZONS_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const CACHE_PREFIX = "orbital-atlas-catalog-v1:";
 const TEXTURE_WIDTH = 2048;
 const TEXTURE_HEIGHT = 1024;
@@ -27,6 +35,8 @@ const MIN_EARTH_BUFFER_SIZE = 512;
 const MAX_EARTH_BUFFER_SIZE = 4096;
 const EARTH_BUFFER_PADDING = 24;
 const MIN_ZOOM = 0.01;
+const VIEW_ROTATION_EPOCH = Date.now();
+const VIEW_ROTATION_EPOCH_ANGLE = earthRotationAngleAt(VIEW_ROTATION_EPOCH);
 
 const canvas = document.querySelector("#globe");
 const context = canvas.getContext("2d");
@@ -56,6 +66,26 @@ const weatherCards = new Map(SPACE_WEATHER_FEEDS.map((feed) => [feed.id, {
   time: document.querySelector(`#weather-${feed.id}-time`),
 }]));
 const frameEnvironmentButton = document.querySelector("#frameEnvironment");
+const aircraftToggle = document.querySelector("#showAircraft");
+const stationsToggle = document.querySelector("#showStations");
+const aircraftLatitudeInput = document.querySelector("#aircraftLatitude");
+const aircraftLongitudeInput = document.querySelector("#aircraftLongitude");
+const aircraftRadiusInput = document.querySelector("#aircraftRadius");
+const loadAircraftButton = document.querySelector("#loadAircraft");
+const aircraftStatusElement = document.querySelector("#aircraftStatus");
+const stationsStatusElement = document.querySelector("#stationsStatus");
+const loadHorizonsButton = document.querySelector("#loadHorizons");
+const horizonsStatusElement = document.querySelector("#horizonsStatus");
+const solarSystemPlotElement = document.querySelector("#solarSystemPlot");
+const solarSystemBodiesElement = document.querySelector("#solarSystemBodies");
+const coverageStates = new Map([
+  ["orbit", document.querySelector("#coverage-orbit-state")],
+  ["environment", document.querySelector("#coverage-environment-state")],
+  ["aviation", document.querySelector("#coverage-aviation-state")],
+  ["receiver", document.querySelector("#coverage-receiver-state")],
+  ["solar", document.querySelector("#coverage-solar-state")],
+  ["telemetry", document.querySelector("#coverage-telemetry-state")],
+]);
 const textureCanvas = document.createElement("canvas");
 textureCanvas.width = TEXTURE_WIDTH;
 textureCanvas.height = TEXTURE_HEIGHT;
@@ -86,14 +116,272 @@ let width = 0;
 let height = 0;
 let pixelRatio = 1;
 let cacheAvailable = true;
+let catalogLoadInProgress = false;
 let weatherRefreshInProgress = false;
+let aircraftRefreshInProgress = false;
+let stationsRefreshInProgress = false;
+let horizonsRefreshInProgress = false;
 let imageryRefreshInProgress = false;
 let weatherSeriesById = new Map();
+let aircraftPositions = [];
+let groundStations = [];
+let lastSolarSystemEpoch = null;
 let activePointers = new Map();
 let pinchStart = null;
 
 function setStatus(message) {
   statusElement.textContent = message;
+}
+
+function earthRotationOffsetDegrees(timeMs) {
+  const radians = earthRotationAngleAt(timeMs) - VIEW_ROTATION_EPOCH_ANGLE;
+  return ((radians * 180 / Math.PI) % 360 + 360) % 360;
+}
+
+function normalizeLongitude(longitude) {
+  return ((longitude + 180) % 360 + 360) % 360 - 180;
+}
+
+function viewLongitudeAt(timeMs) {
+  return normalizeLongitude(viewLongitude - earthRotationOffsetDegrees(timeMs));
+}
+
+function centerViewOnLongitude(longitude, timeMs = Date.now()) {
+  viewLongitude = longitude + earthRotationOffsetDegrees(timeMs);
+}
+
+function setCoverageState(sourceId, label, stateClass) {
+  const element = coverageStates.get(sourceId);
+  if (!element) return;
+  element.textContent = label;
+  element.className = `coverage-state ${stateClass}`;
+}
+
+async function fetchSourceJson(path, timeoutMs = 25000) {
+  const response = await fetch(path, {
+    cache: "no-store",
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  let payload;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new Error(`Data service returned an invalid response (HTTP ${response.status}).`);
+  }
+  if (!response.ok) {
+    throw new Error(payload.error ?? `Data service returned HTTP ${response.status}.`);
+  }
+  return payload;
+}
+
+function sourceTimestamp(timestamp) {
+  if (!Number.isFinite(timestamp)) return "source time unavailable";
+  return `${new Date(timestamp).toISOString().replace("T", " ").slice(0, 19)} UTC`;
+}
+
+function setSourceStatus(element, message, isError = false) {
+  element.textContent = message;
+  element.classList.toggle("source-error", isError);
+}
+
+async function loadAircraft() {
+  if (aircraftRefreshInProgress) return;
+  const latitude = Number(aircraftLatitudeInput.value);
+  const longitude = Number(aircraftLongitudeInput.value);
+  const radius = Number(aircraftRadiusInput.value);
+  if (
+    !Number.isFinite(latitude) || latitude < -90 || latitude > 90
+    || !Number.isFinite(longitude) || longitude < -180 || longitude > 180
+    || !Number.isFinite(radius) || radius < 1 || radius > 250
+  ) {
+    setSourceStatus(aircraftStatusElement, "Enter latitude −90…90, longitude −180…180, and radius 1…250 nautical miles.", true);
+    return;
+  }
+
+  aircraftRefreshInProgress = true;
+  loadAircraftButton.disabled = true;
+  setSourceStatus(aircraftStatusElement, "Requesting regional ADS-B positions…");
+  try {
+    const query = new URLSearchParams({
+      lat: String(latitude),
+      lon: String(longitude),
+      dist: String(radius),
+    });
+    const payload = await fetchSourceJson(`/api/sources/aircraft?${query}`);
+    if (!Array.isArray(payload.aircraft) || !Number.isFinite(payload.fetchedAt)) {
+      throw new TypeError("The data service returned an invalid aircraft payload.");
+    }
+    const parsed = parseAircraftPayload({
+      ac: (payload.aircraft ?? []).map((aircraft) => ({
+        hex: aircraft.id,
+        flight: aircraft.name,
+        lat: aircraft.latitude,
+        lon: aircraft.longitude,
+        alt_geom: aircraft.altitudeKm / 0.0003048,
+        track: aircraft.trackDegrees,
+        gs: aircraft.groundSpeedKnots,
+        seen_pos: (payload.fetchedAt - aircraft.positionTimestamp) / 1000,
+      })),
+    }, payload.fetchedAt);
+    aircraftPositions = parsed;
+    setSourceStatus(
+      aircraftStatusElement,
+      `ADSB.lol · ${parsed.length.toLocaleString()} recent aircraft · ${sourceTimestamp(payload.fetchedAt)}.`,
+    );
+    setCoverageState("aviation", "LIVE REGIONAL DATA", "connected");
+  } catch (error) {
+    setSourceStatus(
+      aircraftStatusElement,
+      aircraftPositions.length
+        ? `Refresh failed; retaining ${aircraftPositions.length.toLocaleString()} prior positions: ${error.message}`
+        : `Aircraft unavailable: ${error.message}`,
+      true,
+    );
+    setCoverageState("aviation", "UNAVAILABLE", "pending");
+  } finally {
+    aircraftRefreshInProgress = false;
+    loadAircraftButton.disabled = false;
+  }
+}
+
+async function loadGroundStations() {
+  if (stationsRefreshInProgress) return;
+  stationsRefreshInProgress = true;
+  setSourceStatus(stationsStatusElement, "Refreshing public SatNOGS station locations…");
+  try {
+    const payload = await fetchSourceJson("/api/sources/stations");
+    if (!Array.isArray(payload.stations) || !payload.stations.every((station) => (
+      Number.isFinite(station.latitude)
+      && Number.isFinite(station.longitude)
+      && Number.isFinite(station.altitudeKm)
+      && typeof station.connected === "boolean"
+    ))) {
+      throw new TypeError("The data service returned an invalid station payload.");
+    }
+    const stations = payload.stations;
+    groundStations = stations;
+    const connected = stations.filter((station) => station.connected).length;
+    const futureObservations = stations.reduce(
+      (total, station) => total + (station.futureObservations ?? 0),
+      0,
+    );
+    const truncated = payload.truncated ? " · display capped at 5,000 stations" : "";
+    setSourceStatus(
+      stationsStatusElement,
+      `SatNOGS · ${stations.length.toLocaleString()} published station locations · ${connected.toLocaleString()} marked connected · ${futureObservations.toLocaleString()} future-observation count${truncated} · refreshed ${sourceTimestamp(payload.fetchedAt)}.`,
+    );
+    setCoverageState("receiver", "STATION DIRECTORY", "limited");
+  } catch (error) {
+    setSourceStatus(
+      stationsStatusElement,
+      groundStations.length
+        ? `Refresh failed; retaining ${groundStations.length.toLocaleString()} prior stations: ${error.message}`
+        : `Station directory unavailable: ${error.message}`,
+      true,
+    );
+    setCoverageState("receiver", "UNAVAILABLE", "pending");
+  } finally {
+    stationsRefreshInProgress = false;
+  }
+}
+
+function renderSolarSystem(payload) {
+  const bodies = payload.bodies;
+  const maxDistanceKm = Math.max(...bodies.map((body) => body.distanceKm));
+  const centerX = 360;
+  const centerY = 160;
+  const plotRadius = 132;
+  const scale = plotRadius / maxDistanceKm;
+  const colors = new Map([
+    ["199", "#a9a9b5"],
+    ["299", "#e7bc82"],
+    ["399", "#60b8ef"],
+    ["499", "#e97968"],
+    ["599", "#d5b27a"],
+    ["699", "#d9c68a"],
+    ["799", "#7ed1d1"],
+    ["899", "#8298ed"],
+  ]);
+  const markers = bodies.map((body) => {
+    const x = centerX + body.positionKm.x * scale;
+    const y = centerY - body.positionKm.y * scale;
+    const color = colors.get(body.target.id) ?? "#d6e1e4";
+    return `<g>
+      <circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="${body.target.id === "399" ? 4 : 3}" fill="${color}">
+        <title>${escapeHtml(body.target.name)} · ${new Intl.NumberFormat(undefined, { maximumSignificantDigits: 5 }).format(body.distanceKm)} km from Sun</title>
+      </circle>
+      <text x="${(x + 6).toFixed(2)}" y="${(y - 5).toFixed(2)}" fill="${color}" font-size="9">${escapeHtml(body.target.name)}</text>
+    </g>`;
+  }).join("");
+  solarSystemPlotElement.innerHTML = `
+    <svg viewBox="0 0 720 320" role="img" aria-label="Sun-centered ecliptic positions at ${escapeHtml(sourceTimestamp(bodies[0].timestamp))}">
+      <line x1="${centerX - plotRadius}" y1="${centerY}" x2="${centerX + plotRadius}" y2="${centerY}" stroke="#27404c" />
+      <line x1="${centerX}" y1="${centerY - plotRadius}" x2="${centerX}" y2="${centerY + plotRadius}" stroke="#27404c" />
+      <circle cx="${centerX}" cy="${centerY}" r="5" fill="#ffd47a"><title>Sun</title></circle>
+      <text x="${centerX + 8}" y="${centerY - 8}" fill="#ffd47a" font-size="9">Sun</text>
+      ${markers}
+      <text x="12" y="304" fill="#8295a0" font-size="9">Top-down ecliptic projection · true distance scale · body sizes not to scale</text>
+    </svg>
+  `;
+  solarSystemBodiesElement.innerHTML = bodies.map((body) => {
+    const speed = Math.hypot(
+      body.velocityKmPerSecond.x,
+      body.velocityKmPerSecond.y,
+      body.velocityKmPerSecond.z,
+    );
+    const distanceAu = body.distanceKm / 149597870.7;
+    return `<article class="solar-body-card">
+      <strong>${escapeHtml(body.target.name)}</strong>
+      <span>${distanceAu.toFixed(3)} AU from Sun</span>
+      <span>${speed.toFixed(2)} km/s heliocentric speed</span>
+    </article>`;
+  }).join("");
+}
+
+async function loadHorizons() {
+  if (horizonsRefreshInProgress) return;
+  horizonsRefreshInProgress = true;
+  loadHorizonsButton.disabled = true;
+  setSourceStatus(horizonsStatusElement, "Requesting current JPL Horizons planetary vectors…");
+  try {
+    const payload = await fetchSourceJson("/api/sources/solar-system", 90000);
+    if (
+      !Array.isArray(payload.bodies)
+      || payload.bodies.length === 0
+      || !payload.bodies.every((body) => (
+        body.target
+        && Number.isFinite(body.timestamp)
+        && Number.isFinite(body.distanceKm)
+        && Object.values(body.positionKm ?? {}).length === 3
+        && Object.values(body.positionKm).every(Number.isFinite)
+        && Object.values(body.velocityKmPerSecond ?? {}).length === 3
+        && Object.values(body.velocityKmPerSecond).every(Number.isFinite)
+      ))
+    ) {
+      throw new TypeError("The data service returned invalid Solar System vectors.");
+    }
+    if (!Array.isArray(payload.errors)) {
+      throw new TypeError("The data service returned invalid Solar System source status.");
+    }
+    renderSolarSystem(payload);
+    const complete = payload.bodies.length === SOLAR_SYSTEM_BODIES.length && payload.errors.length === 0;
+    const sourceTime = sourceTimestamp(payload.bodies[0].timestamp);
+    lastSolarSystemEpoch = payload.bodies[0].timestamp;
+    setSourceStatus(
+      horizonsStatusElement,
+      `JPL Horizons · ${payload.bodies.length}/${SOLAR_SYSTEM_BODIES.length} bodies · ${complete ? "complete" : `partial · ${payload.errors.join(" · ")}`} · computed epoch ${sourceTime}.`,
+    );
+    setCoverageState("solar", complete ? "COMPUTED EPHEMERIS" : "PARTIAL EPHEMERIS", "limited");
+  } catch (error) {
+    const retainedData = Number.isFinite(lastSolarSystemEpoch)
+      ? `Refresh failed; retaining ephemeris from ${sourceTimestamp(lastSolarSystemEpoch)}: `
+      : "JPL Horizons unavailable: ";
+    setSourceStatus(horizonsStatusElement, `${retainedData}${error.message}`, true);
+    setCoverageState("solar", lastSolarSystemEpoch ? "STALE EPHEMERIS" : "UNAVAILABLE", "pending");
+  } finally {
+    horizonsRefreshInProgress = false;
+    loadHorizonsButton.disabled = false;
+  }
 }
 
 function cacheKey(catalog) {
@@ -131,6 +419,19 @@ function writeCache(catalog, records, fetchedAt) {
   }
 }
 
+async function fetchCatalogRecords(catalog) {
+  const url = new URL(CATALOG_URL);
+  url.searchParams.set("GROUP", catalog);
+  url.searchParams.set("FORMAT", "JSON");
+  const response = await fetch(url);
+  if (!response.ok) {
+    const error = new Error(`CelesTrak returned HTTP ${response.status}.`);
+    error.status = response.status;
+    throw error;
+  }
+  return response.json();
+}
+
 function installCatalog(records, fetchedAt, catalog, fromCache) {
   const parsed = parseCatalog(records);
   if (parsed.length === 0) {
@@ -146,41 +447,58 @@ function installCatalog(records, fetchedAt, catalog, fromCache) {
   renderDetails();
   objectCountElement.textContent = objects.length.toLocaleString();
   frameOrbits();
-  const source = catalog === "active" ? "CelesTrak active catalog" : "CelesTrak space stations";
+  const source = catalog === "active"
+    ? "CelesTrak active Earth-orbit catalog"
+    : "CelesTrak space stations";
   const ageMinutes = Math.max(0, Math.floor((Date.now() - fetchedAt) / 60000));
   setStatus(`${source} · ${fromCache ? `cached ${ageMinutes} min ago` : "just fetched"} · element epoch varies by object`);
 }
 
 async function loadCatalog() {
+  if (catalogLoadInProgress) return;
   const catalog = catalogSelect.value;
   const cached = readCache(catalog);
-  if (cached && Date.now() - cached.fetchedAt < REFRESH_INTERVAL_MS) {
+  let usingCachedCatalog = false;
+  if (cached) {
     try {
       installCatalog(cached.records, cached.fetchedAt, catalog, true);
+      usingCachedCatalog = true;
     } catch (error) {
       setStatus(`Could not use saved catalog: ${error.message}`);
     }
-    return;
+    if (usingCachedCatalog && Date.now() - cached.fetchedAt < REFRESH_INTERVAL_MS) return;
   }
 
+  catalogLoadInProgress = true;
   loadButton.disabled = true;
   loadButton.textContent = "Loading public catalog…";
   setStatus("Requesting orbital elements from CelesTrak…");
   try {
-    const url = new URL(CATALOG_URL);
-    url.searchParams.set("GROUP", catalog);
-    url.searchParams.set("FORMAT", "JSON");
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`CelesTrak returned HTTP ${response.status}. No retry was attempted.`);
-    }
-    const records = await response.json();
+    const records = await fetchCatalogRecords(catalog);
     const fetchedAt = Date.now();
     installCatalog(records, fetchedAt, catalog, false);
     writeCache(catalog, records, fetchedAt);
   } catch (error) {
-    setStatus(`Catalog unavailable: ${error.message}`);
+    if (usingCachedCatalog) {
+      const ageMinutes = Math.max(0, Math.floor((Date.now() - cached.fetchedAt) / 60000));
+      setStatus(`Refresh failed; showing ${catalog} catalog cached ${ageMinutes} min ago: ${error.message}`);
+    } else if (catalog === "active" && error.status === 403) {
+      setStatus("CelesTrak denied the active catalog (HTTP 403); trying its smaller stations set instead…");
+      try {
+        const records = await fetchCatalogRecords("stations");
+        const fetchedAt = Date.now();
+        installCatalog(records, fetchedAt, "stations", false);
+        catalogSelect.value = "stations";
+        setStatus("Active catalog denied (HTTP 403); showing the smaller CelesTrak stations set. Select the active catalog to try it again.");
+        writeCache("stations", records, fetchedAt);
+      } catch (fallbackError) {
+        setStatus(`Active catalog denied (HTTP 403); stations fallback unavailable: ${fallbackError.message}`);
+      }
+    } else {
+      setStatus(`Catalog unavailable: ${error.message}`);
+    }
   } finally {
+    catalogLoadInProgress = false;
     loadButton.disabled = false;
     loadButton.innerHTML = 'Load public catalog <span aria-hidden="true">↗</span>';
   }
@@ -242,6 +560,7 @@ function renderDetails() {
     ["Orbit regime", regimesById.get(object.regimeId).shortLabel],
     ["Altitude (SGP4)", `${Math.round(position.altitudeKm).toLocaleString()} km`],
     ["Speed (SGP4)", `${position.speedKmPerSecond.toFixed(3)} km/s`],
+    ["Ground position", `${position.latitude.toFixed(2)}°, ${position.longitude.toFixed(2)}°`],
     ["Mean perigee", `${Math.round(object.perigeeKm).toLocaleString()} km`],
     ["Mean apogee", `${Math.round(object.apogeeKm).toLocaleString()} km`],
     ["Inclination", `${(object.inclination * 180 / Math.PI).toFixed(2)}°`],
@@ -259,7 +578,7 @@ function renderDetails() {
 function selectObject(object) {
   selectedId = object.id;
   const position = cachedPositions.get(object.id) ?? positionAt(object, Date.now());
-  if (position) viewLongitude = position.longitude;
+  if (position) centerViewOnLongitude(position.longitude);
   renderList();
   renderDetails();
 }
@@ -476,19 +795,20 @@ function renderEarthTexture(now) {
   const surfaceTexture = cloudTexture ?? landTexture;
   if (!surfaceTexture) return;
   const sun = subsolarPoint(now);
+  const currentViewLongitude = viewLongitudeAt(now);
   if (
-    Math.abs(viewLongitude - renderedTextureLongitude) < 0.35
+    Math.abs(normalizeLongitude(currentViewLongitude - renderedTextureLongitude)) < 0.1
     && Math.abs(sun.latitude - renderedSunLatitude) < 0.5
     && Math.abs(sun.longitude - renderedSunLongitude) < 0.5
   ) return;
-  renderedTextureLongitude = viewLongitude;
+  renderedTextureLongitude = currentViewLongitude;
   renderedSunLatitude = sun.latitude;
   renderedSunLongitude = sun.longitude;
   const pixels = earthImage.data;
   const texturePixels = surfaceTexture.data;
   const center = earthBufferSize / 2;
   const solarLatitude = sun.latitude * Math.PI / 180;
-  const solarLongitude = (sun.longitude - viewLongitude) * Math.PI / 180;
+  const solarLongitude = (sun.longitude - currentViewLongitude) * Math.PI / 180;
   const lightX = Math.cos(solarLatitude) * Math.sin(solarLongitude);
   const lightY = Math.sin(solarLatitude);
   const lightZ = Math.cos(solarLatitude) * Math.cos(solarLongitude);
@@ -506,7 +826,7 @@ function renderEarthTexture(now) {
 
       const normalZ = Math.sqrt(1 - distanceSquared);
       const latitude = Math.asin(normalY);
-      const longitude = viewLongitude * Math.PI / 180 + Math.atan2(normalX, normalZ);
+      const longitude = currentViewLongitude * Math.PI / 180 + Math.atan2(normalX, normalZ);
       const wrappedLongitude = (longitude / (2 * Math.PI) + 0.5 + 1) % 1;
       const textureX = Math.min(TEXTURE_WIDTH - 1, Math.floor(wrappedLongitude * TEXTURE_WIDTH));
       const textureY = Math.max(0, Math.min(TEXTURE_HEIGHT - 1,
@@ -524,9 +844,12 @@ function renderEarthTexture(now) {
   earthContext.putImageData(earthImage, 0, 0);
 }
 
-function pointOnGlobe(position, centerX, centerY, radius) {
+function pointOnGlobe(position, centerX, centerY, radius, timeMs = Date.now(), positionTime = timeMs) {
   const lat = position.latitude * Math.PI / 180;
-  const deltaLongitude = (position.longitude - viewLongitude) * Math.PI / 180;
+  const rotationSinceView = positionTime === timeMs
+    ? 0
+    : (earthRotationAngleAt(positionTime) - earthRotationAngleAt(timeMs)) * 180 / Math.PI;
+  const deltaLongitude = (position.longitude + rotationSinceView - viewLongitudeAt(timeMs)) * Math.PI / 180;
   const depth = Math.cos(lat) * Math.cos(deltaLongitude);
   const orbitalRadius = position.radiusKm;
   const earthRadiusRatio = EARTH_RADIUS_KM_VALUE / Math.max(EARTH_RADIUS_KM_VALUE, orbitalRadius);
@@ -600,6 +923,28 @@ function drawGrid(centerX, centerY, radius) {
   context.stroke();
 }
 
+function drawEarthAxis(centerX, centerY, radius) {
+  if (radius < 35) return;
+  context.save();
+  context.strokeStyle = "rgba(201, 230, 235, 0.7)";
+  context.fillStyle = "#d7e8e9";
+  context.lineWidth = 1;
+  context.beginPath();
+  context.moveTo(centerX, centerY - radius * 1.15);
+  context.lineTo(centerX, centerY - radius * 0.84);
+  context.stroke();
+  context.beginPath();
+  context.moveTo(centerX, centerY - radius * 1.15);
+  context.lineTo(centerX - 3, centerY - radius * 1.15 + 6);
+  context.lineTo(centerX + 3, centerY - radius * 1.15 + 6);
+  context.closePath();
+  context.fill();
+  context.font = "8px monospace";
+  context.textAlign = "center";
+  context.fillText("N", centerX, centerY - radius * 1.15 - 5);
+  context.restore();
+}
+
 function refreshPositions(now) {
   if (now - positionsUpdatedAt < 1500) return;
   positionsUpdatedAt = now;
@@ -621,12 +966,13 @@ function drawOrbit(object, centerX, centerY, radius, now) {
   context.beginPath();
   let drawing = false;
   for (let index = 0; index <= samples; index += 1) {
-    const position = positionAt(object, now + period * 1000 * index / samples);
+    const positionTime = now + period * 1000 * index / samples;
+    const position = positionAt(object, positionTime);
     if (!position) {
       drawing = false;
       continue;
     }
-    const point = pointOnGlobe(position, centerX, centerY, radius);
+    const point = pointOnGlobe(position, centerX, centerY, radius, now, positionTime);
     if (!point) {
       drawing = false;
       continue;
@@ -637,6 +983,42 @@ function drawOrbit(object, centerX, centerY, radius, now) {
   }
   context.stroke();
   context.restore();
+}
+
+function drawPublicDataLayers(centerX, centerY, radius, now) {
+  if (stationsToggle.checked) {
+    for (const station of groundStations) {
+      const point = pointOnGlobe({
+        latitude: station.latitude,
+        longitude: station.longitude,
+        radiusKm: EARTH_RADIUS_KM_VALUE + station.altitudeKm,
+      }, centerX, centerY, radius, now);
+      if (!point) continue;
+      context.beginPath();
+      context.fillStyle = station.connected ? "#75e0bd" : "#b8a6e8";
+      context.globalAlpha = station.connected ? 0.9 : 0.62;
+      context.arc(point.x, point.y, station.connected ? 2 : 1.5, 0, Math.PI * 2);
+      context.fill();
+    }
+  }
+
+  if (aircraftToggle.checked) {
+    for (const aircraft of aircraftPositions) {
+      if (now - aircraft.positionTimestamp > 120000) continue;
+      const point = pointOnGlobe({
+        latitude: aircraft.latitude,
+        longitude: aircraft.longitude,
+        radiusKm: EARTH_RADIUS_KM_VALUE + aircraft.altitudeKm,
+      }, centerX, centerY, radius, now);
+      if (!point) continue;
+      context.beginPath();
+      context.fillStyle = "#ffae6b";
+      context.globalAlpha = 0.9;
+      context.arc(point.x, point.y, 2.2, 0, Math.PI * 2);
+      context.fill();
+    }
+  }
+  context.globalAlpha = 1;
 }
 
 function draw(now) {
@@ -651,6 +1033,7 @@ function draw(now) {
   const centerX = width / 2;
   const centerY = height / 2;
   const radius = Math.max(1, Math.min(width * 0.37, height * 0.43) * zoom);
+  const renderTime = Date.now();
   const stars = 75;
   for (let index = 0; index < stars; index += 1) {
     const x = (Math.sin(index * 127.1 + 8) * 0.5 + 0.5) * width;
@@ -661,18 +1044,20 @@ function draw(now) {
 
   drawSpaceEnvironmentFx(centerX, centerY, radius, now);
   drawGrid(centerX, centerY, radius);
+  drawEarthAxis(centerX, centerY, radius);
   drawAtmosphericXrayFx(centerX, centerY, radius, now);
-  refreshPositions(Date.now());
+  drawPublicDataLayers(centerX, centerY, radius, renderTime);
+  refreshPositions(renderTime);
   const selected = objects.find((object) => object.id === selectedId);
   if (selected && (regimeSelect.value === "all" || selected.regimeId === regimeSelect.value)) {
-    drawOrbit(selected, centerX, centerY, radius, Date.now());
+    drawOrbit(selected, centerX, centerY, radius, renderTime);
   }
 
   for (const object of objects) {
     if (regimeSelect.value !== "all" && object.regimeId !== regimeSelect.value) continue;
     const position = cachedPositions.get(object.id);
     if (!position) continue;
-    const point = pointOnGlobe(position, centerX, centerY, radius);
+    const point = pointOnGlobe(position, centerX, centerY, radius, renderTime);
     if (!point) continue;
     const isSelected = object.id === selectedId;
     const pulse = isSelected ? 0.6 + 0.7 * (0.5 + 0.5 * Math.sin(now / 260)) : 0;
@@ -708,7 +1093,7 @@ function drawSpaceEnvironmentFx(centerX, centerY, radius, now) {
     : 10;
   const sun = subsolarPoint(now);
   const solarLatitude = sun.latitude * Math.PI / 180;
-  const solarLongitude = (sun.longitude - viewLongitude) * Math.PI / 180;
+  const solarLongitude = (sun.longitude - viewLongitudeAt(now)) * Math.PI / 180;
   const projectedSunX = Math.cos(solarLatitude) * Math.sin(solarLongitude);
   const projectedSunY = -Math.sin(solarLatitude);
   const projectedSunLength = Math.hypot(projectedSunX, projectedSunY);
@@ -820,7 +1205,7 @@ function drawAtmosphericXrayFx(centerX, centerY, radius, now) {
   if (!xray || xray.value <= 0) return;
   const sun = subsolarPoint(now);
   const latitude = sun.latitude * Math.PI / 180;
-  const longitude = (sun.longitude - viewLongitude) * Math.PI / 180;
+  const longitude = (sun.longitude - viewLongitudeAt(now)) * Math.PI / 180;
   const projectedSunX = Math.cos(latitude) * Math.sin(longitude);
   const projectedSunY = -Math.sin(latitude);
   if (Math.hypot(projectedSunX, projectedSunY) < 0.08) return;
@@ -889,6 +1274,11 @@ async function refreshSpaceWeather() {
     }
 
     const refreshedAt = new Date().toISOString().slice(11, 19) + " UTC";
+    setCoverageState(
+      "environment",
+      updatedCount > 0 ? (errors.length ? "PARTIAL MEASUREMENTS" : "LIVE MEASUREMENTS") : "UNAVAILABLE",
+      updatedCount > 0 ? "connected" : "pending",
+    );
     weatherStatusElement.textContent = errors.length
       ? `${updatedCount}/${SPACE_WEATHER_FEEDS.length} feeds updated ${refreshedAt} · ${errors.join(" · ")}`
       : `All ${updatedCount} NOAA feeds updated ${refreshedAt}`;
@@ -901,6 +1291,17 @@ async function refreshSpaceWeather() {
 }
 
 loadButton.addEventListener("click", loadCatalog);
+loadAircraftButton.addEventListener("click", () => {
+  aircraftToggle.checked = true;
+  loadAircraft();
+});
+loadHorizonsButton.addEventListener("click", loadHorizons);
+aircraftToggle.addEventListener("change", () => {
+  if (aircraftToggle.checked && aircraftPositions.length === 0) loadAircraft();
+});
+stationsToggle.addEventListener("change", () => {
+  if (stationsToggle.checked && groundStations.length === 0) loadGroundStations();
+});
 searchInput.addEventListener("input", renderList);
 regimeSelect.addEventListener("change", () => {
   const selected = objects.find((object) => object.id === selectedId);
@@ -964,12 +1365,13 @@ canvas.addEventListener("pointerup", (event) => {
     const centerX = width / 2;
     const centerY = height / 2;
     const radius = Math.max(1, Math.min(width * 0.37, height * 0.43) * zoom);
+    const renderTime = Date.now();
     let nearest = null;
     let nearestDistance = 9;
     for (const object of objects) {
       const position = cachedPositions.get(object.id);
       if (!position) continue;
-      const point = pointOnGlobe(position, centerX, centerY, radius);
+      const point = pointOnGlobe(position, centerX, centerY, radius, renderTime);
       if (!point) continue;
       const distance = Math.hypot(point.x - clickX, point.y - clickY);
       if (distance < nearestDistance) {
@@ -1018,9 +1420,18 @@ document.addEventListener("fullscreenchange", () => {
 resizeCanvas();
 updateClock();
 window.setInterval(updateClock, 1000);
+window.setInterval(loadCatalog, REFRESH_INTERVAL_MS + 1000);
 window.setInterval(refreshSpaceWeather, SPACE_WEATHER_REFRESH_INTERVAL_MS);
+window.setInterval(() => {
+  if (aircraftToggle.checked && aircraftPositions.length > 0) loadAircraft();
+}, AIRCRAFT_REFRESH_INTERVAL_MS);
+window.setInterval(loadGroundStations, STATIONS_REFRESH_INTERVAL_MS);
+window.setInterval(loadHorizons, HORIZONS_REFRESH_INTERVAL_MS);
 window.setInterval(loadEarthImagery, EARTH_IMAGERY_REFRESH_INTERVAL_MS);
 requestAnimationFrame(draw);
 loadLandTexture();
 loadEarthImagery();
 refreshSpaceWeather();
+loadGroundStations();
+loadHorizons();
+loadCatalog();

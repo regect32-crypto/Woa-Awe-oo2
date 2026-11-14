@@ -140,6 +140,13 @@ export function positionAt(object, timeMs) {
   };
 }
 
+export function earthRotationAngleAt(timeMs) {
+  if (!Number.isFinite(timeMs)) throw new TypeError("Earth rotation time must be a finite timestamp.");
+  const date = new Date(timeMs);
+  if (!Number.isFinite(date.getTime())) throw new RangeError("Earth rotation time is outside the supported date range.");
+  return satellite.gstime(date);
+}
+
 export function orbitPeriodSeconds(object) {
   return TAU / object.meanMotionRadiansPerSecond;
 }

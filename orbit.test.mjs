@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { classifyOrbit, parseCatalog, positionAt } from "./orbit.mjs";
+import {
+  classifyOrbit,
+  earthRotationAngleAt,
+  parseCatalog,
+  positionAt,
+} from "./orbit.mjs";
 
 function orbitAt(altitudeKm, eccentricity = 0, periodHours = 12) {
   return {
@@ -73,4 +78,13 @@ test("classifies low, medium, geosynchronous, elliptical, and high orbits", () =
   assert.equal(classifyOrbit(orbitAt(35786, 0.001, 23.934)).id, "geo");
   assert.equal(classifyOrbit(orbitAt(20000, 0.7)).id, "heo");
   assert.equal(classifyOrbit(orbitAt(50000, 0.05, 48)).id, "high");
+});
+
+test("tracks Greenwich sidereal rotation at approximately one revolution per sidereal day", () => {
+  const start = Date.parse("2026-11-14T00:00:00Z");
+  const afterHour = earthRotationAngleAt(start + 60 * 60 * 1000);
+  const beforeHour = earthRotationAngleAt(start);
+  const rotation = ((afterHour - beforeHour) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+  assert.ok(Math.abs(rotation * 180 / Math.PI - 15.041) < 0.01);
+  assert.throws(() => earthRotationAngleAt(Number.NaN), /finite timestamp/);
 });
