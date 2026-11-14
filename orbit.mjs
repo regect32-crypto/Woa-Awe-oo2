@@ -118,7 +118,7 @@ export function positionAt(object, timeMs) {
 
   const date = new Date(timeMs);
   const state = satellite.propagate(object.satrec, date);
-  if (!state?.position) return null;
+  if (!state?.position || !state?.velocity) return null;
 
   const gmst = satellite.gstime(date);
   const earthFixed = satellite.eciToEcf(state.position, gmst);
@@ -128,6 +128,7 @@ export function positionAt(object, timeMs) {
     !Number.isFinite(radiusKm)
     || !Number.isFinite(geodetic.height)
     || !Object.values(earthFixed).every(Number.isFinite)
+    || !Object.values(state.velocity).every(Number.isFinite)
   ) return null;
 
   return {
@@ -135,6 +136,7 @@ export function positionAt(object, timeMs) {
     longitude: normalizeDegrees(Math.atan2(earthFixed.y, earthFixed.x) * DEGREES_PER_RADIAN),
     altitudeKm: geodetic.height,
     radiusKm,
+    speedKmPerSecond: Math.hypot(state.velocity.x, state.velocity.y, state.velocity.z),
   };
 }
 

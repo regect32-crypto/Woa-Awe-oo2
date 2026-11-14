@@ -57,6 +57,7 @@ test("propagates a finite Earth-fixed position for a catalog object", () => {
   assert.ok(Math.abs(position.longitude - 85.1361) < 0.01);
   assert.ok(Math.abs(position.altitudeKm - 414.686) < 0.2);
   assert.ok(Math.abs(position.radiusKm - position.altitudeKm - 6378.137) < 1);
+  assert.ok(position.speedKmPerSecond > 7 && position.speedKmPerSecond < 8);
 });
 
 test("rejects malformed catalog payloads and timestamps", () => {

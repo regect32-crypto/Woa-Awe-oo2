@@ -34,17 +34,18 @@
               <button id="zoomOut" type="button" aria-label="Zoom out">−</button>
               <button id="zoomIn" type="button" aria-label="Zoom in">+</button>
               <button id="frameOrbits" type="button">Frame orbits</button>
+              <button id="frameEnvironment" type="button">Frame space environment</button>
               <button id="resetZoom" type="button">Reset zoom</button>
               <button id="fullscreenToggle" type="button" aria-label="Open globe fullscreen">Fullscreen ⛶</button>
             </div>
-            <div class="globe-hint">DRAG TO ROTATE <span aria-hidden="true">·</span> SCROLL TO ZOOM / FRAME HIGHER ORBITS</div>
+            <div class="globe-hint">DRAG TO ROTATE <span aria-hidden="true">·</span> PINCH / SCROLL TO ZOOM</div>
             <div class="globe-overlay">
               <span class="overlay-label">CATALOG OBJECTS</span>
               <strong id="objectCount">0</strong>
             </div>
           </div>
           <div class="globe-footer">
-          <div class="legend"><span class="legend-dot"></span> Orbit-level colors <span class="legend-selected"></span> Selected</div>
+            <div class="legend"><span class="legend-dot"></span> Orbit-level colors <span class="legend-selected"></span> Selected</div>
             <div class="status-stack">
               <p id="sourceStatus" role="status">No catalog loaded. Choose a set to begin.</p>
               <p id="mapStatus" role="status">Loading land outlines…</p>
@@ -99,15 +100,79 @@
         </aside>
       </section>
 
+      <section class="environment-panel" aria-labelledby="environmentTitle">
+        <header class="environment-heading">
+          <div>
+            <p class="eyebrow">SPACE ENVIRONMENT / LIVE OBSERVATIONS</p>
+            <h2 id="environmentTitle">Measured inputs and telemetry limits</h2>
+            <p class="subheading">Live readings used by the distance-scaled environment effects in the globe viewport.</p>
+          </div>
+          <div class="environment-tools">
+            <small id="weatherStatus" role="status">Waiting for NOAA / ACE observations…</small>
+          </div>
+        </header>
+        <div class="environment-legend" aria-label="Space environment effects shown in the globe">
+          <span><i class="legend-solar-wind"></i>Solar-wind flow · measured ACE speed</span>
+          <span><i class="legend-magnetosphere"></i>Magnetopause · pressure-only estimate</span>
+          <span><i class="legend-xray"></i>X-ray · incident flux at sunlit atmosphere</span>
+          <span class="environment-scale-note">Orbit positions and environment radii share one Earth-radius scale.</span>
+        </div>
+        <div class="weather-grid" aria-label="Latest space-weather measurements">
+          <article class="weather-card">
+            <p>Solar X-ray · 0.1–0.8 nm</p>
+            <strong id="weather-xray-value">—</strong>
+            <span class="weather-unit">W/m² · GOES measurement</span>
+            <small id="weather-xray-time">Waiting for valid data</small>
+          </article>
+          <article class="weather-card">
+            <p>Proton flux · ≥10 MeV</p>
+            <strong id="weather-protons-value">—</strong>
+            <span class="weather-unit">cm⁻² s⁻¹ sr⁻¹ · GOES</span>
+            <small id="weather-protons-time">Waiting for valid data</small>
+          </article>
+          <article class="weather-card">
+            <p>Electron flux · ≥2 MeV</p>
+            <strong id="weather-electrons-value">—</strong>
+            <span class="weather-unit">cm⁻² s⁻¹ sr⁻¹ · GOES</span>
+            <small id="weather-electrons-time">Waiting for valid data</small>
+          </article>
+          <article class="weather-card">
+            <p>Geomagnetic activity · Kp</p>
+            <strong id="weather-kp-value">—</strong>
+            <span class="weather-unit">estimated index · 0–9</span>
+            <small id="weather-kp-time">Waiting for valid data</small>
+          </article>
+          <article class="weather-card">
+            <p>Solar wind · ACE upstream</p>
+            <strong id="weather-solarwind-value">—</strong>
+            <span id="weather-solarwind-unit" class="weather-unit">km/s · density and temperature pending</span>
+            <small id="weather-solarwind-time">Waiting for valid data</small>
+          </article>
+        </div>
+        <p class="environment-note">
+          ACE density and speed set dynamic pressure; they do not supply the interplanetary magnetic-field direction needed for a full magnetosphere model.
+          GOES particle fluxes and Kp are instrument/index measurements, not global particle maps or satellite-specific dose.
+          X-ray flux is shown as incident solar irradiance, not surface heating.
+          Spacecraft mass, onboard temperature, attitude, and hardware telemetry are shown only when a source actually publishes them; none are inferred here.
+        </p>
+      </section>
+
       <section class="scope-strip" aria-label="Data coverage">
-        <div><span class="scope-icon">◌</span><strong>Orbit data</strong><span>Public OMM catalog · SGP4 / SDP4</span></div>
-        <div><span class="scope-icon">⌁</span><strong>Weather</strong><span>Not connected</span></div>
-        <div><span class="scope-icon">▤</span><strong>Economy &amp; logistics</strong><span>Not simulated</span></div>
-        <div><span class="scope-icon">⊙</span><strong>Signals &amp; gateways</strong><span>Not mapped</span></div>
+        <div><span class="scope-icon">◌</span><strong>Orbit data</strong><span>Live public OMM · SGP4 / SDP4 estimates</span></div>
+        <div><span class="scope-icon">⌁</span><strong>Space environment</strong><span>NOAA SWPC / ACE measurements</span></div>
+        <div><span class="scope-icon">✈</span><strong>Aviation</strong><span>ADSB.lol public regional feed · server connector needed</span></div>
+        <div><span class="scope-icon">⌂</span><strong>Ground receivers</strong><span>SatNOGS public schedules · not live link telemetry</span></div>
+        <div><span class="scope-icon">✧</span><strong>Solar System</strong><span>JPL ephemerides are model positions, not live telemetry</span></div>
+        <div><span class="scope-icon">◉</span><strong>Onboard thermal / mass</strong><span>Mission-specific telemetry required; not inferred</span></div>
       </section>
 
       <footer class="page-footer">
-        <span>Orbital radius is to scale; position accuracy depends on the published element set and epoch.</span>
+        <span>Positions and speeds are SGP4 estimates using published elements, not satellite telemetry.</span>
+        <a href="https://nasa-gibs.github.io/gibs-api-docs/" target="_blank" rel="noreferrer">NASA GIBS imagery ↗</a>
+        <a href="https://services.swpc.noaa.gov/json/" target="_blank" rel="noreferrer">NOAA SWPC / ACE data ↗</a>
+        <a href="https://www.adsb.lol/docs/open-data/api" target="_blank" rel="noreferrer">ADSB.lol open data ↗</a>
+        <a href="https://network.satnogs.org/api/" target="_blank" rel="noreferrer">SatNOGS API ↗</a>
+        <a href="https://ssd.jpl.nasa.gov/horizons/" target="_blank" rel="noreferrer">NASA/JPL Horizons ↗</a>
         <a href="https://www.naturalearthdata.com/about/terms-of-use/" target="_blank" rel="noreferrer">Land outlines: Natural Earth ↗</a>
         <a href="https://celestrak.org/NORAD/documentation/gp-data-formats.php" target="_blank" rel="noreferrer">Satellite elements: CelesTrak ↗</a>
       </footer>
