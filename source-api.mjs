@@ -1,6 +1,6 @@
 import {
   parseAircraftPayload,
-  parseHorizonsVector,
+  parseHorizonsVectorSeries,
   parseSatnogsStations,
   MOON_TARGET,
   SOLAR_SYSTEM_BODIES,
@@ -9,11 +9,15 @@ import {
 const AIRCRAFT_CACHE_MS = 60 * 1000;
 const STATIONS_CACHE_MS = 30 * 60 * 1000;
 const HORIZONS_CACHE_MS = 30 * 60 * 1000;
+const HORIZONS_STEP_MS = 15 * 60 * 1000;
+const HORIZONS_HALF_WINDOW_MS = 13 * 60 * 60 * 1000;
 const MAX_STATION_COUNT = 5000;
 const MAX_UPSTREAM_BYTES = 16 * 1024 * 1024;
 const MAX_ADSB_REQUESTS_PER_24H = 450;
 const ADSB_WINDOW_MS = 24 * 60 * 60 * 1000;
 const MAX_CACHE_ENTRIES = 128;
+const MAX_UPSTREAM_ATTEMPTS = 3;
+const MAX_RETRY_WAIT_MS = 4000;
 const ADSB_BASE_URL = "https://api.adsb.lol/v2";
 const SATNOGS_STATIONS_URL = "https://network.satnogs.org/api/stations/?format=json";
 const HORIZONS_URL = "https://ssd.jpl.nasa.gov/api/horizons.api";
@@ -36,41 +40,68 @@ function writeJson(response, status, body, retryAfter = null) {
   response.end(JSON.stringify(body));
 }
 
-async function fetchJson(fetchImpl, url, headers = {}) {
-  let response;
-  try {
-    response = await fetchImpl(url, {
-      headers,
-      signal: AbortSignal.timeout(20000),
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new UpstreamError(`${new URL(url).hostname} request failed: ${message}`);
+function retryDelayMs(retryAfter, attempt) {
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    const retryAt = Number.isFinite(seconds)
+      ? Date.now() + seconds * 1000
+      : Date.parse(retryAfter);
+    return Number.isFinite(retryAt) ? Math.max(0, retryAt - Date.now()) : null;
   }
-  if (!response.ok) {
-    const status = response.status === 429 ? 429 : 502;
-    throw new UpstreamError(
-      `${new URL(url).hostname} returned HTTP ${response.status}.`,
-      status,
-      response.headers.get("retry-after"),
-    );
-  }
+  return 250 * (2 ** attempt);
+}
 
-  let text;
-  try {
-    text = await response.text();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new UpstreamError(`${new URL(url).hostname} response could not be read: ${message}`);
+async function fetchJson(fetchImpl, url, headers = {}, beforeAttempt = () => {}) {
+  const hostname = new URL(url).hostname;
+  for (let attempt = 0; attempt < MAX_UPSTREAM_ATTEMPTS; attempt += 1) {
+    beforeAttempt();
+    let response;
+    try {
+      response = await fetchImpl(url, {
+        headers,
+        signal: AbortSignal.timeout(20000),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (attempt + 1 === MAX_UPSTREAM_ATTEMPTS) {
+        throw new UpstreamError(`${hostname} request failed after ${MAX_UPSTREAM_ATTEMPTS} attempts: ${message}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs(null, attempt)));
+      continue;
+    }
+    if (!response.ok) {
+      const retryAfter = response.headers.get("retry-after");
+      const transient = response.status === 429 || response.status >= 500;
+      const delay = transient ? retryDelayMs(retryAfter, attempt) : null;
+      if (!transient || attempt + 1 === MAX_UPSTREAM_ATTEMPTS
+        || delay === null || delay > MAX_RETRY_WAIT_MS) {
+        throw new UpstreamError(
+          `${hostname} returned HTTP ${response.status}.`,
+          response.status === 429 ? 429 : 502,
+          retryAfter,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      continue;
+    }
+
+    let text;
+    try {
+      text = await response.text();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new UpstreamError(`${hostname} response could not be read: ${message}`);
+    }
+    if (text.length > MAX_UPSTREAM_BYTES) {
+      throw new UpstreamError("Upstream response exceeded the configured size limit.");
+    }
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new UpstreamError("Upstream returned invalid JSON.");
+    }
   }
-  if (text.length > MAX_UPSTREAM_BYTES) {
-    throw new UpstreamError("Upstream response exceeded the configured size limit.");
-  }
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new UpstreamError("Upstream returned invalid JSON.");
-  }
+  throw new UpstreamError(`${hostname} request failed after ${MAX_UPSTREAM_ATTEMPTS} attempts.`);
 }
 
 function parseCoordinate(value, minimum, maximum, name) {
@@ -131,12 +162,16 @@ async function getAircraft(fetchImpl, cache, url) {
   const key = `${latitude.toFixed(3)}:${longitude.toFixed(3)}:${distance}`;
 
   return cachedRequest(cache, `aircraft:${key}`, AIRCRAFT_CACHE_MS, async () => {
-    enforceAdsbRequestLimit();
     const upstreamUrl = `${ADSB_BASE_URL}/lat/${latitude}/lon/${longitude}/dist/${distance}`;
     const headers = process.env.ADSB_LOL_API_KEY
       ? { "x-api-key": process.env.ADSB_LOL_API_KEY }
       : {};
-    const payload = await fetchJson(fetchImpl, upstreamUrl, headers);
+    const payload = await fetchJson(
+      fetchImpl,
+      upstreamUrl,
+      headers,
+      () => enforceAdsbRequestLimit(),
+    );
     let aircraft;
     try {
       aircraft = parseAircraftPayload(payload, Number.isFinite(Number(payload?.now)) ? Number(payload.now) : Date.now());
@@ -172,8 +207,15 @@ async function getStations(fetchImpl, cache) {
   });
 }
 
-async function fetchHorizonsBody(fetchImpl, target, requestedAt, centerId = "10", centerName = "Sun") {
-  const time = requestedAt.toISOString().slice(0, 16).replace("T", " ");
+async function fetchHorizonsBody(
+  fetchImpl,
+  target,
+  startAt,
+  stopAt,
+  centerId = "10",
+  centerName = "Sun",
+) {
+  const formatTime = (timeMs) => new Date(timeMs).toISOString().slice(0, 16).replace("T", " ");
   const params = new URLSearchParams({
     format: "json",
     COMMAND: `'${target.id}'`,
@@ -181,8 +223,9 @@ async function fetchHorizonsBody(fetchImpl, target, requestedAt, centerId = "10"
     MAKE_EPHEM: "YES",
     EPHEM_TYPE: "VECTORS",
     CENTER: `'500@${centerId}'`,
-    TLIST: `'${time}'`,
-    TLIST_TYPE: "CAL",
+    START_TIME: `'${formatTime(startAt)}'`,
+    STOP_TIME: `'${formatTime(stopAt)}'`,
+    STEP_SIZE: "'15m'",
     TIME_TYPE: "UT",
     QUANTITIES: "'1'",
   });
@@ -191,7 +234,7 @@ async function fetchHorizonsBody(fetchImpl, target, requestedAt, centerId = "10"
     throw new UpstreamError(payload.error ?? "JPL Horizons returned no result.");
   }
   try {
-    return parseHorizonsVector(payload.result, target.id, centerName);
+    return parseHorizonsVectorSeries(payload.result, target.id, centerName);
   } catch (error) {
     throw new UpstreamError(`JPL Horizons response for ${target.name} was invalid: ${error.message}`);
   }
@@ -202,11 +245,17 @@ async function getSolarSystem(fetchImpl, cache) {
     value.errors.length ? 60 * 1000 : HORIZONS_CACHE_MS
   ), async () => {
     const requestedAt = new Date();
+    const startAt = Math.floor(
+      (requestedAt.getTime() - HORIZONS_HALF_WINDOW_MS) / HORIZONS_STEP_MS,
+    ) * HORIZONS_STEP_MS;
+    const stopAt = Math.ceil(
+      (requestedAt.getTime() + HORIZONS_HALF_WINDOW_MS) / HORIZONS_STEP_MS,
+    ) * HORIZONS_STEP_MS;
     const results = [];
     for (let index = 0; index < SOLAR_SYSTEM_BODIES.length; index += 2) {
       const batch = await Promise.allSettled(
         SOLAR_SYSTEM_BODIES.slice(index, index + 2)
-          .map((target) => fetchHorizonsBody(fetchImpl, target, requestedAt)),
+          .map((target) => fetchHorizonsBody(fetchImpl, target, startAt, stopAt)),
       );
       results.push(...batch);
       if (index + 2 < SOLAR_SYSTEM_BODIES.length) {
@@ -216,7 +265,7 @@ async function getSolarSystem(fetchImpl, cache) {
     let moon = null;
     const errors = [];
     try {
-      moon = await fetchHorizonsBody(fetchImpl, MOON_TARGET, requestedAt, "399", "Earth");
+      moon = await fetchHorizonsBody(fetchImpl, MOON_TARGET, startAt, stopAt, "399", "Earth");
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       errors.push(`Moon: ${reason}`);
@@ -238,6 +287,11 @@ async function getSolarSystem(fetchImpl, cache) {
     }
     return {
       fetchedAt: Date.now(),
+      range: {
+        startTime: startAt,
+        stopTime: stopAt,
+        stepMinutes: HORIZONS_STEP_MS / 60000,
+      },
       bodies,
       moon,
       errors,

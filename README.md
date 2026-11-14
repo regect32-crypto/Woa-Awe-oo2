@@ -46,6 +46,15 @@ the region entered by the user, and does not request device location. Keep API
 keys in `.env` for local work or in the hosting platform's secret settings in
 deployment; do not put credentials in frontend code.
 
+In VS Code, the **Run production app on 4175** task builds the app and starts
+the production server on port `4175` whenever this workspace is opened. This
+restores the process when the workspace reopens; it does not keep the app
+running while the Codespace is stopped or restart it after an unexpected
+process failure. Those behaviors are controlled by the hosting environment.
+Keep forwarded port `4175` private unless public access is explicitly needed.
+The production server adds browser security headers, but does not terminate
+TLS; use the hosting platform or a reverse proxy for HTTPS.
+
 ## Data and accuracy
 
 - Satellite element sets: [CelesTrak GP data](https://celestrak.org/NORAD/documentation/gp-data-formats.php),
@@ -55,26 +64,49 @@ deployment; do not put credentials in frontend code.
   publishes GP elements; spacecraft are shown when represented in that
   catalog. It is not a complete list of all spacecraft or deep-space missions.
   Objects without public GP elements, maneuvering vehicles, and classified or
-  otherwise unavailable objects cannot be plotted from this source.
+  otherwise unavailable objects cannot be plotted from this source. Every
+  valid object in the loaded group is propagated and plotted at Earth-neighborhood
+  zoom; the searchable catalog list pages through all matches in batches.
 - Orbits are propagated with the SGP4/SDP4 implementation in `satellite.js`
   using CelesTrak OMM records. Accuracy is still limited by the published
   elements, their epoch, and the model; this is not a guarantee of exact
   real-time satellite position.
 - Current orbital speed is computed from SGP4's propagated velocity vector.
   It is an estimate based on the published element set, not onboard telemetry.
-- The main view is a navigable, top-down J2000 ecliptic projection of the Sun,
-  eight planets, and Moon. Planet positions come from JPL Horizons and are
-  advanced continuously from the returned velocity vectors between
-  thirty-minute ephemeris refreshes. The Moon uses an Earth-centered Horizons
-  vector. Use “Entire Solar System” for the overview, “Earth + Moon” to zoom to
-  the lunar neighborhood, or select an Earth-orbit catalog object to frame its
-  orbit. Drag to pan and pinch or scroll to zoom.
-- Orbital distances use a common AU scale. Planet and Moon graphics are
-  enlarged for visibility; the mean planet-orbit circles are guides rather
-  than Horizons osculating paths. The view shades bodies by their computed
-  Sun/Earth geometry and shows the Moon's illuminated fraction. Shadow cones
-  are physically based in length but are only a 2D projection; eclipse depth
-  and atmospheric scattering are not modeled.
+- The main Solar System panel shows the Sun, eight planets, five major dwarf
+  planets, and Moon in an
+  interactive perspective 3D projection of J2000 ecliptic coordinates. Planet
+  and dwarf-planet positions and tracks come from timestamped JPL Horizons
+  vectors sampled every 15 minutes across a rolling window of about 26 hours.
+  The selected model time is interpolated between adjacent samples using their
+  position and velocity; positions are not extrapolated beyond the returned
+  interval. The Moon uses an Earth-centered Horizons vector added to Earth's
+  Sun-centered vector. Pluto is represented by its system barycenter. Use
+  “Entire Solar System” to frame all loaded bodies, “Earth satellite fleet” to
+  frame the loaded Earth-orbit catalog, and “Earth + Moon” to zoom to the lunar
+  neighborhood. Camera rotation can be enabled explicitly; it is off by default.
+  Drag to orbit the camera, Shift-drag to pan, and pinch or scroll to zoom.
+  Ephemeris cards and refresh status are part of the same unified
+  panel, alongside satellite controls, environment observations, aircraft,
+  ground receivers, and source limits.
+- The time control adds a bounded time dimension to the 3D scene, with a
+  twelve-hour window on either side of live UTC and 1×, 60×, and 3,600×
+  playback. Satellite positions use SGP4/SDP4 at the selected time. NOAA,
+  aircraft, and station observations retain their source times and are not
+  replayed or forecast. This is a time-aware visualization, not a relativistic
+  four-dimensional spacetime model.
+- The Download panel saves the currently loaded data as JSON, writes available
+  satellite and Solar System positions at the selected model time as CSV, or
+  saves the canvas as a PNG. Partial data remains labeled with its source and
+  limits; unavailable sources are not filled with invented values. Decorative
+  star twinkle and trajectory glow can be toggled and default off when the
+  device requests reduced motion.
+- The Solar System view contains the Sun, eight planets, five major dwarf
+  planets (Ceres, Pluto's system barycenter, Haumea, Makemake, and Eris), and
+  Earth's Moon—not every asteroid, dwarf planet, natural satellite, or
+  spacecraft. Position vectors are genuine JPL Horizons samples; the view draws
+  no fabricated circular paths or shadow cones. Body markers are visibility
+  symbols and are not to scale.
 - [NOAA SWPC GOES feeds](https://services.swpc.noaa.gov/json/goes/primary/)
   provide X-ray and energetic proton/electron flux; [ACE solar-wind data](https://services.swpc.noaa.gov/json/ace/swepam/ace_swepam_1h.json)
   provide upstream speed, density, and plasma temperature; the
@@ -90,11 +122,14 @@ deployment; do not put credentials in frontend code.
 - Public orbital catalogs and these NOAA feeds do not provide per-satellite
   temperatures, heat-shield readings, or nuclear-system telemetry. Those values
   are not fabricated or inferred from the environmental feeds.
-- All loaded object markers are continuously propagated from the published
+- “Earth satellite fleet” frames all valid objects in the currently loaded
+  public CelesTrak group together; it does not combine every provider group
+  into a single global catalog. All loaded object markers are continuously
+  propagated from the published
   elements. Selecting an Earth-orbit catalog entry focuses the main view on
   Earth and draws its SGP4/SDP4 orbit trace; the trace is a model based on that
   element set, not a measured future path. Orbit and planet distances share
-  physical units, while planetary body sizes are enlarged for visibility.
+  physical units; body markers are symbols and are not to scale.
 - Catalog entries are grouped and color-coded as VLEO, LEO, MEO, GEO,
   highly-elliptical, or high/transfer orbits. The level filter frames the
   selected regime, and the details panel shows current altitude plus mean-element
@@ -108,10 +143,13 @@ deployment; do not put credentials in frontend code.
   same-origin server adapter. The user selects a center and radius (1–250
   nautical miles); recent reported positions are plotted at reported altitude,
   and positions older than two minutes are omitted. Automatic refresh is
-  limited to once every ten minutes while the aircraft layer is enabled. Its
-  ODbL data has an anonymous limit of 500 requests/day per IP; the shared
-  server's IP and cache therefore affect all users. HTTP 429 and `Retry-After`
-  are surfaced rather than retried in a tight loop.
+  limited to once every ten minutes while the aircraft layer is enabled. The
+  documented API offers regional and aircraft-category endpoints, not a global
+  all-aircraft feed; this app uses only regional requests. Its ODbL data has an
+  anonymous limit of 500 requests/day per IP; the shared server enforces a
+  450-attempt rolling 24-hour safety cap and counts retries against that cap.
+  Transient upstream failures receive at most two bounded retries. HTTP 429 and
+  `Retry-After` are surfaced; long provider cooldowns are not retried early.
 - [SatNOGS](https://network.satnogs.org/api/) station locations and the
   source-published connected/status fields are plotted from the public station
   directory, refreshed every 30 minutes and capped at 5,000 displayed
@@ -120,10 +158,14 @@ deployment; do not put credentials in frontend code.
   counts are not pass schedules or proof of a successful link.
 - [NASA/JPL Horizons](https://ssd.jpl.nasa.gov/horizons/) is connected for
   the Sun-centered geometric vectors of Mercury, Venus, Earth, and Mars through
-  Neptune, plus the Moon relative to Earth. Planet positions and heliocentric
-  speeds are refreshed every 30 minutes and advanced from the published
-  velocities between refreshes. These are computed ephemerides, not spacecraft
-  telemetry.
+  Neptune and the major dwarf planets Ceres, Pluto's system barycenter, Haumea,
+  Makemake, and Eris, plus the Moon relative to Earth. Timestamped position and velocity
+  vectors are requested at 15-minute steps over an approximately 26-hour
+  interval; this series refreshes every 30 minutes. Intermediate states use
+  cubic Hermite interpolation between adjacent JPL samples, with no
+  extrapolation outside the interval. These are computed ephemerides, not
+  spacecraft telemetry. The requested set does not include every minor body,
+  natural satellite, or spacecraft.
 - The app has no configured mission-specific source for onboard temperature
   or mass. Those values remain unavailable; neither is inferred from orbit or
   space-weather measurements.

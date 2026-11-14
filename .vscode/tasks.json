@@ -1,0 +1,46 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build production app",
+      "type": "npm",
+      "script": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Start production app on 4175",
+      "type": "npm",
+      "script": "start",
+      "isBackground": true,
+      "options": {
+        "env": {
+          "PORT": "4175"
+        }
+      },
+      "problemMatcher": {
+        "owner": "orbital-atlas",
+        "pattern": {
+          "regexp": "^$"
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^> start$",
+          "endsPattern": "Orbital Atlas listening on http://0\\.0\\.0\\.0:4175"
+        }
+      }
+    },
+    {
+      "label": "Run production app on 4175",
+      "dependsOn": [
+        "Build production app",
+        "Start production app on 4175"
+      ],
+      "dependsOrder": "sequence",
+      "runOptions": {
+        "runOn": "folderOpen",
+        "instanceLimit": 1
+      },
+      "problemMatcher": []
+    }
+  ]
+}

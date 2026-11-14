@@ -17,46 +17,88 @@
         <div class="topbar-note"><span class="live-dot"></span> PUBLIC DATA VIEWER</div>
       </header>
 
-      <section class="workspace" aria-label="Interactive Solar System">
+      <section class="workspace" aria-label="Unified four-dimensional orbital data view">
         <section class="globe-panel">
           <div class="panel-heading">
             <div>
-              <p class="eyebrow">SOLAR SYSTEM / LIVE EPHEMERIS</p>
-              <h1>The Solar System, live.</h1>
-              <p class="subheading">Explore current planetary positions, then zoom from Neptune to the Earth–Moon neighborhood.</p>
+              <p class="eyebrow">4D ORBITAL ATLAS / LIVE + MODEL TIME</p>
+              <h1>One scene. Every domain.</h1>
+              <p class="subheading">Explore planets, major dwarf planets, and Earth-orbit objects across a bounded time window.</p>
             </div>
             <div class="time-chip"><span class="time-dot"></span><span id="clock">--:--:-- UTC</span></div>
           </div>
 
           <div class="globe-stage" id="globeStage">
-            <canvas id="solarSystemCanvas" aria-label="Interactive, Sun-centered Solar System view with the planets and Moon"></canvas>
+            <canvas id="solarSystemCanvas" aria-label="Interactive four-dimensional orbital view with planets, major dwarf planets, Moon, and Earth-orbit objects"></canvas>
             <div class="view-controls" aria-label="Solar System view controls">
               <button id="zoomOut" type="button" aria-label="Zoom out">−</button>
               <button id="zoomIn" type="button" aria-label="Zoom in">+</button>
               <button id="frameSolarSystem" type="button">Entire Solar System</button>
+              <button id="frameEarthFleet" type="button">Earth satellite fleet</button>
               <button id="frameEarthMoon" type="button">Earth + Moon</button>
+              <button id="autoRotateToggle" type="button" aria-pressed="false">Auto-rotate: Off</button>
               <button id="resetZoom" type="button">Center Sun</button>
               <button id="fullscreenToggle" type="button" aria-label="Open Solar System fullscreen">Fullscreen ⛶</button>
+              <button id="visualFxToggle" type="button" aria-pressed="true" title="Toggle decorative visual effects">Effects: On</button>
             </div>
-            <div class="globe-hint">DRAG TO PAN <span aria-hidden="true">·</span> PINCH / SCROLL TO ZOOM <span aria-hidden="true">·</span> SELECT A PLANET TO FOCUS</div>
+            <div class="globe-hint">CLICK TO FOCUS <span aria-hidden="true">·</span> DRAG TO ORBIT <span aria-hidden="true">·</span> SHIFT-DRAG TO PAN <span aria-hidden="true">·</span> PINCH / SCROLL TO ZOOM</div>
             <div class="globe-overlay">
-              <span class="overlay-label">EARTH-ORBIT CATALOG</span>
+              <span class="overlay-label">LOADED EARTH-ORBIT OBJECTS</span>
               <strong id="objectCount">0</strong>
             </div>
           </div>
+          <section class="time-controls" aria-labelledby="timeControlsTitle">
+            <div class="time-controls-heading">
+              <div>
+                <p class="eyebrow">TIME DIMENSION / ±12 H MODEL WINDOW</p>
+                <h2 id="timeControlsTitle">Model time</h2>
+                <p id="simulationTime" class="simulation-time" aria-live="polite">Waiting for current time…</p>
+              </div>
+              <div class="time-actions">
+                <span id="simulationMode" class="time-mode" role="status">LIVE</span>
+                <button id="playSimulation" class="secondary-button" type="button" aria-label="Play model time">Play</button>
+                <label class="sr-only" for="simulationRate">Time playback speed</label>
+                <select id="simulationRate" aria-label="Time playback speed">
+                  <option value="1">1×</option>
+                  <option value="60" selected>60×</option>
+                  <option value="3600">3,600×</option>
+                </select>
+                <button id="returnLive" class="secondary-button" type="button">Return to live</button>
+              </div>
+            </div>
+            <label class="sr-only" for="timeRange">Model time offset from live UTC</label>
+            <input id="timeRange" type="range" min="-720" max="720" step="1" value="0" aria-describedby="timeRangeNote" />
+            <div class="time-range-labels" aria-hidden="true"><span>−12 h</span><span>LIVE</span><span>+12 h</span></div>
+            <p id="timeRangeNote" class="time-range-note">Satellite positions use SGP4/SDP4; Solar System positions use Hermite interpolation between timestamped JPL vectors only. NOAA, aircraft, and station observations remain at their recorded source times—not replayed telemetry.</p>
+          </section>
           <div class="globe-footer">
             <div class="legend">
-              <span class="legend-sun"></span> Sunlight
+              <span class="legend-sun"></span> Sun
               <span class="legend-planet"></span> Planet
               <span class="legend-moon"></span> Moon
-              <span class="legend-orbit"></span> Mean orbit guide
+              <span class="legend-orbit"></span> Sampled JPL track
             </div>
             <div class="status-stack">
               <p id="sourceStatus" role="status">Loading CelesTrak active catalog…</p>
               <p id="mapStatus" role="status">Loading current JPL Horizons ephemerides…</p>
-              <p class="coverage-note">Planet positions use current JPL Horizons vectors; distances are to scale, while body sizes are enlarged for visibility. Moon orbit and planetary paths are visual guides.</p>
+              <p class="coverage-note">All valid records in the loaded public CelesTrak group are propagated; zoom to Earth + Moon to see orbit markers. Planet tracks join timestamped JPL vectors, not assumed circular paths.</p>
             </div>
           </div>
+          <section class="solar-system-details" aria-labelledby="solarSystemTitle">
+            <header class="solar-system-heading">
+              <div>
+                <p class="eyebrow">SOLAR SYSTEM / COMPUTED EPHEMERIS</p>
+                <h2 id="solarSystemTitle">Solar System positions at model time</h2>
+                <p class="subheading">Sun-centered vectors for eight planets and five major dwarf planets, plus an Earth-centered Moon vector; sampled by JPL Horizons every 15 minutes and interpolated only between samples.</p>
+              </div>
+              <button id="loadHorizons" class="secondary-button" type="button">Update ephemerides</button>
+            </header>
+            <p id="horizonsStatus" class="source-status" role="status">Requesting JPL Horizons ephemeris…</p>
+            <div id="solarSystemBodies" class="solar-system-bodies" aria-live="polite">
+              <span class="empty-state">Waiting for computed positions.</span>
+            </div>
+            <p class="orientation-note">The camera is perspective-projected in 3D and the overview frames the full loaded Solar System. Tracks connect sampled JPL positions; body markers are symbols, not physical sizes. Positions are unavailable outside the fetched sample interval.</p>
+          </section>
         </section>
 
         <aside class="control-panel">
@@ -118,6 +160,7 @@
             <div id="objectList" class="object-list" aria-live="polite">
               <p class="empty-state">Loading published orbital elements…</p>
             </div>
+            <button id="loadMoreObjects" class="secondary-button load-more-button" type="button" hidden>Load more catalog objects</button>
           </section>
 
           <section class="control-section details-section">
@@ -126,26 +169,23 @@
               <p class="empty-state">Select a catalog entry to focus on Earth and inspect its published orbital elements.</p>
             </div>
           </section>
-        </aside>
-      </section>
 
-      <section class="solar-system-panel" aria-labelledby="solarSystemTitle">
-        <header class="solar-system-heading">
-          <div>
-            <p class="eyebrow">SOLAR SYSTEM / COMPUTED EPHEMERIS</p>
-            <h2 id="solarSystemTitle">Current Solar System positions</h2>
-            <p class="subheading">JPL Horizons Sun-centered planet vectors and an Earth-centered Moon vector. Positions advance from published velocities between ephemeris refreshes.</p>
-          </div>
-          <button id="loadHorizons" class="secondary-button" type="button">Update ephemerides</button>
-        </header>
-        <p id="horizonsStatus" class="source-status" role="status">Requesting JPL Horizons ephemeris…</p>
-        <div class="solar-system-layout">
-          <div id="solarSystemBodies" class="solar-system-bodies" aria-live="polite">
-            <span class="empty-state">Waiting for computed positions.</span>
-          </div>
-        </div>
-        <p class="orientation-note">Earth rotates using Greenwich Mean Sidereal Time; its rotation axis is inclined 23.44° to the J2000 ecliptic. Precession and nutation are not modeled.</p>
-      </section>
+          <section class="control-section export-section" aria-labelledby="exportTitle">
+            <div class="section-title-row">
+              <div>
+                <p class="eyebrow">DOWNLOAD</p>
+                <h2 id="exportTitle">Take your data</h2>
+              </div>
+            </div>
+            <div class="export-actions">
+              <button id="downloadJson" class="secondary-button" type="button">Loaded data snapshot · JSON</button>
+              <button id="downloadCsv" class="secondary-button" type="button">Positions at model time · CSV</button>
+              <button id="saveScenePng" class="secondary-button" type="button">Save current scene · PNG</button>
+            </div>
+            <p class="micro-copy">Exports include only data currently loaded. Orbit positions are model estimates; observation timestamps stay attached to their source data.</p>
+            <small id="exportStatus" class="source-status" role="status" aria-live="polite">Ready to export the current view and loaded data.</small>
+          </section>
+        </aside>
 
       <section class="environment-panel" aria-labelledby="environmentTitle">
         <header class="environment-heading">
@@ -209,35 +249,42 @@
         <div class="scope-strip">
           <article class="coverage-card">
             <div class="coverage-card-heading"><span class="scope-icon" aria-hidden="true">◌</span><strong>Orbit data</strong><span id="coverage-orbit-state" class="coverage-state connected">LIVE MODEL</span></div>
-            <p>Public OMM elements propagated with SGP4 / SDP4; positions and speeds are estimates, not onboard measurements.</p>
+            <p>All valid public OMM entries in the selected CelesTrak group are propagated with SGP4 / SDP4; positions and speeds are estimates, not onboard measurements.</p>
+            <p class="coverage-limit">Limits: public Earth-orbit records only; elements refresh at most every 2 hours. Invalid records are excluded; accuracy degrades as element epochs age.</p>
             <a href="https://celestrak.org/NORAD/documentation/gp-data-formats.php" target="_blank" rel="noreferrer">CelesTrak OMM ↗</a>
           </article>
           <article class="coverage-card">
             <div class="coverage-card-heading"><span class="scope-icon" aria-hidden="true">⌁</span><strong>Space environment</strong><span id="coverage-environment-state" class="coverage-state pending">CONNECTING</span></div>
             <p>NOAA SWPC / ACE observations with source timestamps; not satellite-specific exposure or a full magnetic-field model.</p>
+            <p class="coverage-limit">Limits: feeds refresh every 5 minutes; ACE SWEpam is hourly and does not provide IMF direction or per-satellite dose.</p>
             <a href="https://services.swpc.noaa.gov/json/" target="_blank" rel="noreferrer">NOAA SWPC data ↗</a>
           </article>
           <article class="coverage-card">
             <div class="coverage-card-heading"><span class="scope-icon" aria-hidden="true">✈</span><strong>Aviation</strong><span id="coverage-aviation-state" class="coverage-state pending">WAITING FOR REGION</span></div>
-            <p>ADSB.lol public regional state vectors; markers use reported positions and altitude, not a flight-path prediction.</p>
+            <p>ADSB.lol public regional state vectors; markers use reported positions and altitude, not a flight-path prediction. No global all-aircraft endpoint is available here.</p>
+            <p class="coverage-limit">Limits: user-selected radius is 1–250 nautical miles; 500 requests/day/IP provider quota (450/day server safety cap); positions older than 2 minutes are omitted and auto-refresh is no faster than every 10 minutes.</p>
             <a href="https://www.adsb.lol/docs/open-data/api" target="_blank" rel="noreferrer">ADSB.lol API ↗</a>
           </article>
           <article class="coverage-card">
             <div class="coverage-card-heading"><span class="scope-icon" aria-hidden="true">⌂</span><strong>Ground receivers</strong><span id="coverage-receiver-state" class="coverage-state pending">CONNECTING</span></div>
             <p>SatNOGS station coordinates and published status; schedule counts are not comprehensive live receiver or link telemetry.</p>
+            <p class="coverage-limit">Limits: public directory refreshes every 30 minutes and is capped at 5,000 displayed stations.</p>
             <a href="https://network.satnogs.org/api/" target="_blank" rel="noreferrer">SatNOGS API ↗</a>
           </article>
           <article class="coverage-card">
             <div class="coverage-card-heading"><span class="scope-icon" aria-hidden="true">✧</span><strong>Solar System</strong><span id="coverage-solar-state" class="coverage-state pending">CONNECTING</span></div>
-            <p>JPL Horizons supplies Sun-centered planet vectors and an Earth-centered Moon vector. Displayed body sizes and projected shadow cones are illustrative, not to scale.</p>
+            <p>JPL Horizons supplies Sun-centered vectors for eight planets and five major dwarf planets, plus an Earth-centered Moon vector. Sampled tracks show returned positions; Pluto is represented by its system barycenter.</p>
+            <p class="coverage-limit">Limits: 15-minute samples span about 26 hours and refresh every 30 minutes. Interpolation is limited to adjacent samples; no extrapolation, other minor bodies, other moons, or spacecraft telemetry.</p>
             <a href="https://ssd.jpl.nasa.gov/horizons/" target="_blank" rel="noreferrer">JPL Horizons ↗</a>
           </article>
           <article class="coverage-card">
             <div class="coverage-card-heading"><span class="scope-icon" aria-hidden="true">◉</span><strong>Onboard thermal / mass</strong><span id="coverage-telemetry-state" class="coverage-state pending">NOT AVAILABLE</span></div>
             <p>Requires a mission-specific published telemetry source. Temperature and mass are never inferred from orbit or weather.</p>
+            <p class="coverage-limit">Limits: no onboard thermal, mass, attitude, or hardware telemetry is connected.</p>
             <span class="coverage-source">Mission-specific telemetry required</span>
           </article>
         </div>
+      </section>
       </section>
 
       <footer class="page-footer">

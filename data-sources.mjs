@@ -1,4 +1,4 @@
-export const HORIZONS_TARGETS = Object.freeze([
+export const PLANET_TARGETS = Object.freeze([
   Object.freeze({ id: "10", name: "Sun" }),
   Object.freeze({ id: "199", name: "Mercury" }),
   Object.freeze({ id: "299", name: "Venus" }),
@@ -9,6 +9,19 @@ export const HORIZONS_TARGETS = Object.freeze([
   Object.freeze({ id: "799", name: "Uranus" }),
   Object.freeze({ id: "899", name: "Neptune" }),
   Object.freeze({ id: "301", name: "Moon" }),
+]);
+
+export const DWARF_PLANET_TARGETS = Object.freeze([
+  Object.freeze({ id: "1;", name: "Ceres" }),
+  Object.freeze({ id: "9", name: "Pluto system barycenter" }),
+  Object.freeze({ id: "136108;", name: "Haumea" }),
+  Object.freeze({ id: "136472;", name: "Makemake" }),
+  Object.freeze({ id: "136199;", name: "Eris" }),
+]);
+
+export const HORIZONS_TARGETS = Object.freeze([
+  ...PLANET_TARGETS,
+  ...DWARF_PLANET_TARGETS,
 ]);
 
 export const MOON_TARGET = HORIZONS_TARGETS.find(({ id }) => id === "301");
@@ -117,14 +130,7 @@ function parseHorizonsTimestamp(text) {
     + milliseconds;
 }
 
-export function parseHorizonsVector(result, targetId, center = "Earth") {
-  if (typeof result !== "string") throw new TypeError("JPL Horizons response did not contain vector results.");
-  const target = HORIZONS_TARGETS.find((item) => item.id === targetId);
-  if (!target) throw new RangeError(`Unsupported JPL Horizons target: ${targetId}`);
-
-  const match = result.match(/\$\$SOE\s*([\s\S]*?)\s*\$\$EOE/);
-  if (!match) throw new TypeError("JPL Horizons returned no vector ephemeris for this time.");
-  const block = match[1];
+function parseHorizonsVectorRecord(block, target, center) {
   const readValue = (label) => {
     const value = block.match(new RegExp(`\\b${label}\\s*=\\s*([-+\\d.Ee]+)`));
     return value ? Number(value[1]) : Number.NaN;
@@ -142,6 +148,9 @@ export function parseHorizonsVector(result, targetId, center = "Earth") {
   }
 
   const timestamp = parseHorizonsTimestamp(block);
+  if (!Number.isFinite(timestamp)) {
+    throw new TypeError("JPL Horizons returned a vector with an invalid timestamp.");
+  }
   const longitudeDegrees = ((Math.atan2(positionKm.y, positionKm.x) * 180 / Math.PI) % 360 + 360) % 360;
   const latitudeDegrees = Math.atan2(
     positionKm.z,
@@ -158,4 +167,56 @@ export function parseHorizonsVector(result, targetId, center = "Earth") {
     longitudeDegrees,
     latitudeDegrees,
   };
+}
+
+export function parseHorizonsVectorSeries(result, targetId, center = "Earth") {
+  if (typeof result !== "string") throw new TypeError("JPL Horizons response did not contain vector results.");
+  const target = HORIZONS_TARGETS.find((item) => item.id === targetId);
+  if (!target) throw new RangeError(`Unsupported JPL Horizons target: ${targetId}`);
+
+  const match = result.match(/\$\$SOE\s*([\s\S]*?)\s*\$\$EOE/);
+  if (!match) throw new TypeError("JPL Horizons returned no vector ephemeris for this time range.");
+  const block = match[1];
+  const markers = [...block.matchAll(/^\s*\d+(?:\.\d+)?\s*=\s*A\.D\.\s+/gm)];
+  if (markers.length === 0) {
+    throw new TypeError("JPL Horizons returned no timestamped vectors.");
+  }
+
+  const vectors = markers.map((marker, index) => {
+    const start = marker.index;
+    const end = markers[index + 1]?.index ?? block.length;
+    return parseHorizonsVectorRecord(block.slice(start, end), target, center);
+  });
+  if (vectors.length < 2) {
+    throw new TypeError("JPL Horizons returned fewer than two timestamped vectors.");
+  }
+  if (vectors.some((vector, index) => (
+    index > 0 && vector.timestamp <= vectors[index - 1].timestamp
+  ))) {
+    throw new TypeError("JPL Horizons vector timestamps must be strictly increasing.");
+  }
+  return {
+    target,
+    referenceFrame: "Ecliptic J2000",
+    center,
+    vectors: vectors.map((vector) => ({
+      timestamp: vector.timestamp,
+      positionKm: vector.positionKm,
+      velocityKmPerSecond: vector.velocityKmPerSecond,
+      distanceKm: vector.distanceKm,
+      longitudeDegrees: vector.longitudeDegrees,
+      latitudeDegrees: vector.latitudeDegrees,
+    })),
+  };
+}
+
+export function parseHorizonsVector(result, targetId, center = "Earth") {
+  if (typeof result !== "string") {
+    throw new TypeError("JPL Horizons response did not contain vector results.");
+  }
+  const target = HORIZONS_TARGETS.find((item) => item.id === targetId);
+  if (!target) throw new RangeError(`Unsupported JPL Horizons target: ${targetId}`);
+  const match = result.match(/\$\$SOE\s*([\s\S]*?)\s*\$\$EOE/);
+  if (!match) throw new TypeError("JPL Horizons returned no vector ephemeris for this time range.");
+  return parseHorizonsVectorRecord(match[1], target, center);
 }

@@ -83,6 +83,12 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
 }
 
 const server = createServer((request, response) => {
+  response.setHeader("X-Content-Type-Options", "nosniff");
+  response.setHeader("X-Frame-Options", "DENY");
+  response.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  response.setHeader("Permissions-Policy", "camera=(), geolocation=(), microphone=()");
+  response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+
   sourceApi(request, response, (error) => {
     if (error) {
       console.error("Data source API request failed:", error);

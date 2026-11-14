@@ -1,10 +1,25 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  DWARF_PLANET_TARGETS,
   parseAircraftPayload,
   parseHorizonsVector,
+  parseHorizonsVectorSeries,
   parseSatnogsStations,
 } from "./data-sources.mjs";
+
+test("registers the five requested major dwarf planets with Horizons identifiers", () => {
+  assert.deepEqual(DWARF_PLANET_TARGETS.map(({ name }) => name), [
+    "Ceres",
+    "Pluto system barycenter",
+    "Haumea",
+    "Makemake",
+    "Eris",
+  ]);
+  for (const target of DWARF_PLANET_TARGETS) {
+    assert.ok(target.id);
+  }
+});
 
 test("keeps recent aircraft with finite Earth positions and converts altitude", () => {
   const aircraft = parseAircraftPayload({
@@ -78,4 +93,48 @@ $$EOE`, "301", "Earth");
   assert.equal(vector.target.name, "Moon");
   assert.equal(vector.center, "Earth");
   assert.equal(vector.distanceKm, 384000);
+});
+
+test("parses ordered timestamped JPL vector series and rejects incomplete ranges", () => {
+  const result = `$$SOE
+2461358.569444444 = A.D. 2026-Nov-14 01:40:00.0000 UT
+ X = 1E+08 Y = 2E+07 Z = 1E+06
+ VX= 1E+00 VY= 2E+00 VZ= 3E-01
+ LT= 1E+02 RG= 2E+08 RR= 1E+00
+2461358.579861111 = A.D. 2026-Nov-14 01:55:00.0000 UT
+ X = 1.1E+08 Y = 2.1E+07 Z = 1.1E+06
+ VX= 1.1E+00 VY= 2.1E+00 VZ= 3.1E-01
+ LT= 1E+02 RG= 2E+08 RR= 1E+00
+$$EOE`;
+  const series = parseHorizonsVectorSeries(result, "499");
+
+  assert.equal(series.target.name, "Mars");
+  assert.equal(series.center, "Earth");
+  assert.equal(series.vectors.length, 2);
+  assert.equal(series.vectors[1].timestamp - series.vectors[0].timestamp, 15 * 60 * 1000);
+  const singleRecord = `${result.split("2461358.579861111")[0]}$$EOE`;
+  assert.throws(
+    () => parseHorizonsVectorSeries(singleRecord, "499"),
+    /fewer than two timestamped vectors/,
+  );
+  assert.throws(
+    () => parseHorizonsVectorSeries(result.replace("01:55:00.0000", "01:40:00.0000"), "499"),
+    /strictly increasing/,
+  );
+});
+
+test("parses a verified dwarf-planet Horizons target", () => {
+  const series = parseHorizonsVectorSeries(`$$SOE
+2461358.569444444 = A.D. 2026-Nov-14 01:40:00.0000 UT
+ X = 1E+08 Y = 2E+07 Z = 1E+06
+ VX= 1E+00 VY= 2E+00 VZ= 3E-01
+ LT= 1E+02 RG= 2E+08 RR= 1E+00
+2461358.579861111 = A.D. 2026-Nov-14 01:55:00.0000 UT
+ X = 1.1E+08 Y = 2.1E+07 Z = 1.1E+06
+ VX= 1.1E+00 VY= 2.1E+00 VZ= 3.1E-01
+ LT= 1E+02 RG= 2E+08 RR= 1E+00
+$$EOE`, "136199;");
+
+  assert.equal(series.target.name, "Eris");
+  assert.equal(series.vectors.length, 2);
 });
